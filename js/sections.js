@@ -1,0 +1,595 @@
+/* ============================================================
+   sections.js —— 四个互相独立的功能分区
+
+   刻意不做「操作队列」，每个分区都是自成一体的：
+   自己一份设置、自己一个执行按钮、自己跑自己的一条路。
+   分区之间唯一共享的东西是左栏那个文件池（那只是「处理哪些图」，
+   不是流水线）。
+
+   四个分区：
+     shell   批量重命名   → 只改名字，输出 ZIP
+     resize  改分辨率     → 只改尺寸，输出 ZIP
+     format  转格式       → 只换编码，输出 ZIP
+     pdf     导出 PDF     → 只合并成一份 PDF
+   ============================================================ */
+
+window.ITB = window.ITB || {};
+
+(function (ITB) {
+  'use strict';
+
+  var U = ITB.util;
+
+  /* ============================================================
+     一、批量重命名
+     ============================================================ */
+
+  var shell = {
+    id: 'shell',
+    els: {},
+
+    params: function () {
+      var e = shell.els;
+      return {
+        replaceOn: e.replaceOn.checked,
+        find: e.find.value,
+        replaceWith: e.replace.value,
+        useRegex: e.regex.checked,
+        caseSensitive: e.caseCase.checked,
+
+        prefixOn: e.prefixOn.checked,
+        prefix: e.prefix.value,
+
+        suffixOn: false,
+        suffix: '',
+
+        numberOn: e.numberOn.checked,
+        startAt: parseInt(e.start.value, 10) || 0,
+        stepBy: parseInt(e.step.value, 10) || 1,
+        padTo: parseInt(e.pad.value, 10) || 3,
+        numberOrder: e.order.value,
+        numberPos: e.pos.value,
+        numberSep: e.sep.value
+      };
+    },
+
+    init: function (onChange) {
+      var e = shell.els = {
+        replaceOn: U.$('rn-replace-on'),
+        find: U.$('rn-find'),
+        replace: U.$('rn-replace'),
+        regex: U.$('rn-regex'),
+        caseCase: U.$('rn-case'),
+        prefixOn: U.$('rn-prefix-on'),
+        prefix: U.$('rn-prefix'),
+        suffix: U.$('rn-suffix'),
+        numberOn: U.$('rn-number-on'),
+        start: U.$('rn-start'),
+        step: U.$('rn-step'),
+        pad: U.$('rn-pad'),
+        sep: U.$('rn-sep'),
+        pos: U.$('rn-pos'),
+        order: U.$('rn-order'),
+
+        numberPreview: U.$('rn-number-preview'),
+        summary: U.$('rn-summary'),
+        preview: U.$('rn-preview'),
+        status: U.$('rn-status'),
+        run: U.$('rn-run')
+      };
+
+      var inputs = document.querySelectorAll(
+        '#rn-replace-on, #rn-find, #rn-replace, #rn-regex, #rn-case, ' +
+        '#rn-prefix-on, #rn-prefix, #rn-number-on, #rn-start, #rn-step, ' +
+        '#rn-pad, #rn-sep, #rn-pos, #rn-order');
+      for (var i = 0; i < inputs.length; i++) {
+        inputs[i].addEventListener('input', onChange);
+        inputs[i].addEventListener('change', onChange);
+      }
+
+      // 执行按钮由 app.js 统一绑定（要走进度条、取消和结果提示），
+      // 这里不再重复绑，否则一次点击会触发两次下载
+    },
+
+    /** 算出每个选中文件最终会叫什么名字 */
+    plan: function () {
+      var selected = ITB.selectedFiles();
+      var p = shell.params();
+      var bases = selected.map(function (f) { return U.splitExt(f.name).base; });
+      var newBases = ITB.rename.mapNames(bases, p);
+
+      var out = [];
+      for (var i = 0; i < selected.length; i++) {
+        var f = selected[i];
+        var ext = U.splitExt(f.name).ext;
+        var finalName = U.joinName(newBases[i], ext);
+        out.push({
+          file: f,
+          originalName: f.name,
+          finalName: finalName,
+          changed: finalName !== f.name
+        });
+      }
+      return out;
+    },
+
+    refresh: function () {
+      var e = shell.els;
+      var selected = ITB.selectedFiles();
+      var anyRule = e.replaceOn.checked || e.prefixOn.checked || e.numberOn.checked;
+
+      // 编号示意
+      if (e.numberOn.checked) {
+        var w = Math.max(1, Math.min(12, parseInt(e.pad.value, 10) || 3));
+        var start = parseInt(e.start.value, 10) || 0;
+        var step = parseInt(e.step.value, 10) || 1;
+        var sep = e.sep.value || '';
+        var a = U.pad(start, w);
+        var b = U.pad(start + step, w);
+        e.numberPreview.textContent = '编号长这样：' +
+          (e.pos.value === 'prefix' ? sep + a + '、' + sep + b : a + sep + '、' + b + sep);
+      } else {
+        e.numberPreview.textContent = '勾选后才能填编号参数。';
+      }
+
+      var plan = shell.plan();
+      var dup = ITB.rename.findDuplicates(plan.map(function (n) { return n.finalName; }));
+      var changed = plan.filter(function (n) { return n.changed; });
+
+      /* 预览列表 */
+      U.clear(e.preview);
+      if (!selected.length) {
+        e.summary.textContent = '先勾选要处理的图片。';
+      } else if (!anyRule) {
+        e.summary.textContent = '还没有启用任何规则，文件名不会改变（ZIP 里还是原名）。';
+      } else {
+        e.summary.textContent = '共 ' + selected.length + ' 张，其中 ' +
+          changed.length + ' 个文件名会变。' +
+          (dup.ok ? '' : ' ⚠ 有重名，见下方红字。');
+      }
+
+      var shown = changed.length ? changed : plan.slice(0, 0);
+      if (shown.length) {
+        var table = U.el('div', { cls: 'rename-rows', parent: e.preview });
+        var limit = Math.min(shown.length, 300);
+        for (var i = 0; i < limit; i++) {
+          var row = U.el('div', { cls: 'rename-row', parent: table });
+          U.el('span', { cls: 'rename-idx', text: String(i + 1), parent: row });
+          U.el('span', { cls: 'rename-old', text: shown[i].originalName, parent: row });
+          U.el('span', { cls: 'rename-arrow', text: '→', parent: row });
+          U.el('span', { cls: 'rename-new', text: shown[i].finalName, parent: row });
+        }
+        if (shown.length > limit) {
+          U.el('p', { cls: 'sec-hint', text: '⋯ 还有 ' + (shown.length - limit) + ' 个同样会改名', parent: e.preview });
+        }
+      } else if (selected.length) {
+        U.el('p', { cls: 'sec-hint', text: '所有文件名都保持不变。', parent: e.preview });
+      }
+
+      /* 重名 */
+      if (!dup.ok && selected.length) {
+        var box = U.el('div', { cls: 'inline-alert', parent: e.preview });
+        U.el('strong', { text: '有 ' + dup.dups.length + ' 个名字会重复：', parent: box });
+        var ul = U.el('ul', { parent: box });
+        for (var k = 0; k < Math.min(6, dup.dups.length); k++) {
+          U.el('li', { text: dup.dups[k], parent: ul });
+        }
+        if (dup.dups.length > 6) U.el('li', { text: '⋯', parent: ul });
+        U.el('p', { cls: 'sec-hint', text: 'ZIP 里同名条目会互相顶掉，改一下规则再执行。', parent: box });
+      }
+
+      /* 状态与按钮 */
+      var ok = selected.length > 0 && dup.ok;
+      e.run.disabled = ITB.state.busy || !ok;
+
+      if (!selected.length) {
+        e.status.textContent = '先勾选要处理的图片。';
+      } else if (!dup.ok) {
+        e.status.textContent = '有重名，无法执行。';
+        e.status.className = 'run-status is-danger';
+      } else if (!anyRule) {
+        e.status.textContent = '规则都没启用，导出后文件名和原来一样。';
+        e.status.className = 'run-status is-warn';
+      } else {
+        e.status.textContent = '将给 ' + changed.length + ' 张图改名，打包为 ZIP。';
+        e.status.className = 'run-status';
+      }
+
+      return plan;
+    }
+  };
+
+  /* ============================================================
+     二、改分辨率
+     ============================================================ */
+
+  var RESIZE_PRESETS = [
+    { mode: 'width', v: 1920, t: '1920' },
+    { mode: 'width', v: 1280, t: '1280' },
+    { mode: 'width', v: 1080, t: '1080' },
+    { mode: 'width', v: 800, t: '800' },
+    { mode: 'width', v: 640, t: '640' },
+    { mode: 'percent', v: 50, t: '50%' },
+    { mode: 'percent', v: 25, t: '25%' }
+  ];
+
+  var resize = {
+    id: 'resize',
+    els: {},
+
+    mode: function () {
+      var list = document.querySelectorAll('input[name="rs-mode"]');
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].checked) return list[i].value;
+      }
+      return 'width';
+    },
+
+    params: function () {
+      var e = resize.els;
+      var mode = resize.mode();
+      var value = parseFloat(e.value.value);
+      if (!isFinite(value) || value <= 0) value = (mode === 'percent') ? 100 : 1920;
+
+      return {
+        mode: mode,
+        width: mode === 'width' ? value : 0,
+        height: mode === 'height' ? value : 0,
+        percent: mode === 'percent' ? value : 0,
+        allowUpscale: e.upscale.checked
+      };
+    },
+
+    init: function (onChange) {
+      var e = resize.els = {
+        value: U.$('rs-value'),
+        unit: U.$('rs-unit'),
+        presets: U.$('rs-presets'),
+        hint: U.$('rs-hint'),
+        upscale: U.$('rs-upscale'),
+        status: U.$('rs-status'),
+        run: U.$('rs-run')
+      };
+
+      var radios = document.querySelectorAll('input[name="rs-mode"]');
+      for (var i = 0; i < radios.length; i++) {
+        radios[i].addEventListener('change', function () {
+          // 切换模式时给个合理的默认值
+          if (resize.mode() === 'percent' && parseFloat(e.value.value) > 400) {
+            e.value.value = '50';
+          } else if (resize.mode() !== 'percent' && parseFloat(e.value.value) <= 100) {
+            e.value.value = '1920';
+          }
+          onChange();
+        });
+      }
+
+      e.value.addEventListener('input', onChange);
+      e.upscale.addEventListener('change', onChange);
+
+      /* 预设按钮 */
+      RESIZE_PRESETS.forEach(function (p) {
+        var chip = U.el('button', {
+          cls: 'chip',
+          text: p.t,
+          attrs: { type: 'button', 'data-mode': p.mode, 'data-value': p.v },
+          parent: e.presets
+        });
+        chip.addEventListener('click', function () {
+          var list = document.querySelectorAll('input[name="rs-mode"]');
+          for (var i = 0; i < list.length; i++) list[i].checked = (list[i].value === p.mode);
+          e.value.value = String(p.v);
+          onChange();
+        });
+      });
+
+      // 执行按钮由 app.js 统一绑定
+    },
+
+    refresh: function () {
+      var e = resize.els;
+      var selected = ITB.selectedFiles();
+      var mode = resize.mode();
+      var p = resize.params();
+
+      e.unit.textContent = (mode === 'percent') ? '%' : 'px';
+
+      // 高亮当前预设
+      var chips = e.presets.querySelectorAll('.chip');
+      for (var i = 0; i < chips.length; i++) {
+        var on = chips[i].getAttribute('data-mode') === mode &&
+                 parseFloat(chips[i].getAttribute('data-value')) ===
+                 (mode === 'percent' ? p.percent : (mode === 'height' ? p.height : p.width));
+        chips[i].classList.toggle('is-on', on);
+      }
+
+      var sample = ITB.sampleFile();
+
+      if (!selected.length) {
+        e.hint.textContent = '先勾选要处理的图片。';
+        e.status.textContent = '先勾选要处理的图片。';
+        e.status.className = 'run-status';
+        e.run.disabled = true;
+        return;
+      }
+
+      if (!sample || !sample.measured) {
+        e.hint.textContent = '正在读取尺寸…';
+        e.status.textContent = '正在读取图片尺寸…';
+        e.run.disabled = true;
+        return;
+      }
+
+      var t = ITB.transform.computeTarget(sample.width, sample.height, p);
+
+      var lines = [];
+      lines.push('以「' + sample.name + '」为例：' + sample.width + ' × ' + sample.height +
+        '  →  ' + t.width + ' × ' + t.height);
+      if (t.blockedByUpscale) {
+        lines.push('⚠ 目标比原图大，已按「禁止放大」保持原尺寸。要放大请勾上上面的选项。');
+      }
+      if (t.unchanged) {
+        lines.push('尺寸和目标一致，图片不会被重新编码。');
+      }
+
+      // 统计一下有多少张会真的变小
+      var willShrink = 0;
+      var willSkip = 0;
+      var up = 0;
+      var sel = ITB.selectedFiles();
+      for (var k = 0; k < sel.length; k++) {
+        if (!sel[k].measured) continue;
+        var tk = ITB.transform.computeTarget(sel[k].width, sel[k].height, p);
+        if (tk.unchanged) willSkip++;
+        else if (tk.blockedByUpscale) { willShrink++; up++; }
+        else if (tk.width > sel[k].width) up++;
+        else willShrink++;
+      }
+      lines.push('共 ' + sel.length + ' 张：' + willShrink + ' 张会改变尺寸，' +
+        willSkip + ' 张保持不变' + (up ? '，其中 ' + up + ' 张因为「禁止放大」而没有按目标放大' : '') + '。');
+
+      e.hint.textContent = lines.join(' ');
+      e.status.textContent = '按' + (mode === 'percent' ? '百分比' : (mode === 'height' ? '高度' : '宽度')) +
+        '输出，打包为 ZIP（不改文件名）。';
+      e.status.className = t.blockedByUpscale ? 'run-status is-warn' : 'run-status';
+      e.run.disabled = ITB.state.busy;
+    }
+  };
+
+  /* ============================================================
+     三、转格式
+     ============================================================ */
+
+  var FORMATS = [
+    { id: 'png', label: 'PNG', desc: '无损，体积大，支持透明' },
+    { id: 'jpeg', label: 'JPEG', desc: '有损，体积小，透明会垫白底' },
+    { id: 'webp', label: 'WebP', desc: '有损但效率高，支持透明' }
+  ];
+
+  var format = {
+    id: 'format',
+    els: {},
+    current: 'jpeg',
+
+    init: function (onChange) {
+      var e = format.els = {
+        formats: U.$('fm-formats'),
+        quality: U.$('fm-quality'),
+        hint: U.$('fm-hint'),
+        keepExt: U.$('fm-keep-ext'),
+        status: U.$('fm-status'),
+        run: U.$('fm-run')
+      };
+
+      FORMATS.forEach(function (f) {
+        var chip = U.el('button', {
+          cls: 'chip chip-lg',
+          text: f.label,
+          attrs: { type: 'button', 'data-fmt': f.id, title: f.desc },
+          parent: e.formats
+        });
+        chip.addEventListener('click', function () {
+          format.current = f.id;
+          onChange();
+        });
+      });
+
+      e.quality.addEventListener('input', onChange);
+      e.keepExt.addEventListener('change', onChange);
+
+      // 执行按钮由 app.js 统一绑定
+    },
+
+    params: function () {
+      var pct = parseFloat(format.els.quality.value);
+      if (!isFinite(pct) || pct <= 0) pct = 92;
+      return {
+        format: format.current,
+        quality: Math.max(0.01, Math.min(1, pct / 100))
+      };
+    },
+
+    refresh: function () {
+      var e = format.els;
+      var selected = ITB.selectedFiles();
+      var p = format.params();
+
+      var chips = e.formats.querySelectorAll('[data-fmt]');
+      for (var i = 0; i < chips.length; i++) {
+        chips[i].classList.toggle('is-on', chips[i].getAttribute('data-fmt') === format.current);
+      }
+
+      var isPng = format.current === 'png';
+      e.quality.disabled = isPng || ITB.state.busy;
+
+      var label = ITB.transform.labelOf(format.current);
+      var ext = ITB.transform.extOf(format.current);
+
+      if (isPng) {
+        e.hint.textContent = 'PNG 是无损格式，没有质量参数。';
+      } else if (format.current === 'jpeg') {
+        e.hint.textContent = '数值越低体积越小，画质损失越明显。推荐 85–95。' +
+          'JPEG 不支持透明，透明区域会自动垫成白色（和原 png2pdf 一致）。';
+      } else {
+        e.hint.textContent = '数值越低体积越小。WebP 支持透明，不需要垫白底。';
+      }
+
+      var sameCount = 0;
+      for (var k = 0; k < selected.length; k++) {
+        var src = ITB.transform.formatFromMime(selected[k].file.type);
+        if (src === format.current) sameCount++;
+      }
+
+      if (!selected.length) {
+        e.status.textContent = '先勾选要处理的图片。';
+        e.status.className = 'run-status';
+      } else {
+        var msg = '全部转成 ' + label +
+          (isPng ? '' : '（质量 ' + Math.round(p.quality * 100) + '%）') +
+          '，打包为 ZIP。';
+        if (sameCount) msg += ' 其中 ' + sameCount + ' 张本来就是 ' + label + '，会重新编码一遍。';
+        if (e.keepExt.checked) msg += ' 后缀会改成 ' + ext + '。';
+        e.status.textContent = msg;
+        e.status.className = 'run-status';
+      }
+
+      e.run.disabled = ITB.state.busy || !selected.length;
+
+      /* 文件池里也显示一下会变成什么后缀 */
+      ITB.app.renderPool();
+    }
+  };
+
+  /* ============================================================
+     四、导出 PDF
+     ============================================================ */
+
+  var pdf = {
+    id: 'pdf',
+    els: {},
+
+    init: function (onChange) {
+      var e = pdf.els = {
+        name: U.$('pdf-name'),
+        summary: U.$('pdf-summary'),
+        pages: U.$('pdf-pages'),
+        status: U.$('pdf-status'),
+        run: U.$('pdf-run')
+      };
+
+      e.name.addEventListener('input', onChange);
+
+      // 执行按钮由 app.js 统一绑定
+    },
+
+    outName: function () {
+      return pdf.els.name.value.trim();
+    },
+
+    refresh: function () {
+      var e = pdf.els;
+      var selected = ITB.selectedFiles();
+
+      U.clear(e.pages);
+
+      if (!selected.length) {
+        e.summary.textContent = '先勾选要合并的图片。';
+        e.status.textContent = '先勾选要合并的图片。';
+        e.status.className = 'run-status';
+        e.run.disabled = true;
+        return;
+      }
+
+      e.summary.textContent = '共 ' + selected.length + ' 页，按左栏顺序排列：';
+
+      var list = U.el('div', { cls: 'page-rows', parent: e.pages });
+      var limit = Math.min(selected.length, 200);
+      for (var i = 0; i < limit; i++) {
+        var f = selected[i];
+        var row = U.el('div', { cls: 'page-row', parent: list });
+        U.el('span', { cls: 'page-idx', text: String(i + 1), parent: row });
+        U.el('span', { cls: 'page-name', text: f.name, parent: row });
+        U.el('span', {
+          cls: 'page-size',
+          text: f.measured ? (f.width + '×' + f.height + ' pt') : '读取中…',
+          parent: row
+        });
+      }
+      if (selected.length > limit) {
+        U.el('p', { cls: 'sec-hint', text: '⋯ 还有 ' + (selected.length - limit) + ' 页未列出', parent: e.pages });
+      }
+
+      // 粗估体积：解码后按 JPEG 0.92 大约每像素 0.5 字节
+      var pixels = 0;
+      for (var k = 0; k < selected.length; k++) {
+        if (selected[k].measured) pixels += selected[k].width * selected[k].height;
+      }
+      var est = Math.round(pixels * 0.5);
+
+      e.status.textContent = '将合并 ' + selected.length + ' 页' +
+        (est ? '，粗估 ' + U.formatBytes(est) + '（实际取决于图片内容）' : '') +
+        '。页面尺寸 = 原图像素尺寸。';
+      e.status.className = 'run-status';
+      e.run.disabled = ITB.state.busy;
+    }
+  };
+
+  /* ============================================================
+     统一入口
+     ============================================================ */
+
+  var ALL = { shell: shell, resize: resize, format: format, pdf: pdf };
+
+  ITB.sections = {
+    init: function (onChange) {
+      // 逐个分区初始化，一个分区出问题不该把另外三个也带崩
+      [shell, resize, format, pdf].forEach(function (s) {
+        try {
+          s.init(onChange);
+        } catch (e) {
+          if (window.console && console.error) {
+            console.error('[imgtoolbox] 分区 ' + s.id + ' 初始化失败', e);
+          }
+        }
+      });
+    },
+
+    refreshAll: function () {
+      [shell, resize, format, pdf].forEach(function (s) {
+        try {
+          s.refresh();
+        } catch (e) {
+          if (window.console && console.error) {
+            console.error('[imgtoolbox] 分区 ' + s.id + ' 刷新失败', e);
+          }
+        }
+      });
+    },
+
+    refresh: function (id) {
+      var s = ALL[id];
+      if (!s) return;
+      try {
+        s.refresh();
+      } catch (e) {
+        if (window.console && console.error) {
+          console.error('[imgtoolbox] 分区 ' + id + ' 刷新失败', e);
+        }
+      }
+    },
+
+    get: function (id) { return ALL[id]; },
+
+    /** 文件池显示「导出时会变成什么名字」时用得到 */
+    shellPlan: function () { return shell.plan(); },
+
+    /** 转格式分区有没有换后缀 */
+    formatExt: function () {
+      if (!format.els.keepExt || !format.els.keepExt.checked) return null;
+      return ITB.transform.extOf(format.current);
+    },
+
+    formatLabel: function () { return ITB.transform.labelOf(format.current); }
+  };
+
+})(window.ITB);

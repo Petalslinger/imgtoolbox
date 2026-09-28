@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>图片工具箱 · 重命名 / 改分辨率 / 转格式 / 导出 PDF</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">图</span>
+    <span class="brand-text">图片工具箱</span>
+  </div>
+
+  <div class="topbar-actions">
+    <button id="btn-add-files" class="btn btn-primary" type="button">添加图片…</button>
+    <button id="btn-add-folder" class="btn" type="button">添加文件夹…</button>
+    <button id="btn-clear" class="btn btn-ghost" type="button">清空</button>
+  </div>
+
+  <div class="topbar-sort">
+    <label class="field-inline">
+      <span class="field-label">排序</span>
+      <select id="sel-sort" class="input input-sm">
+        <option value="natural">数字感知（1,2,…,10）</option>
+        <option value="lex">字典序</option>
+      </select>
+    </label>
+    <label class="field-inline">
+      <span class="field-label">方向</span>
+      <select id="sel-order" class="input input-sm">
+        <option value="asc">升序</option>
+        <option value="desc">降序</option>
+      </select>
+    </label>
+    <label class="check-inline" title="勾选后，添加文件夹时会把子文件夹里的图片一并收进来">
+      <input type="checkbox" id="chk-recursive">
+      <span>包含子文件夹</span>
+    </label>
+  </div>
+
+  <div class="topbar-stat">
+    <span id="stat-count" class="stat-strong">0</span>
+    <span class="stat-dim">张</span>
+    <span class="stat-sep"></span>
+    <span id="stat-selected" class="stat-dim">已选 0</span>
+  </div>
+</header>
+
+<!-- 隐藏的原生文件选择控件：纯下载模式，全程不碰磁盘 -->
+<input type="file" id="file-picker" accept="image/*,.png,.jpg,.jpeg,.webp,.bmp,.gif" multiple hidden>
+<input type="file" id="folder-picker" webkitdirectory directory multiple hidden>
+
+<main class="workspace">
+
+  <!-- ── 左栏：文件池（四个分区共用同一批图） ──────────────────── -->
+  <aside class="panel panel-pool">
+    <div class="panel-head">
+      <h2 class="panel-title">文件池</h2>
+      <div class="panel-head-actions">
+        <button id="btn-select-all" class="link-btn" type="button">全选</button>
+        <span class="link-sep">/</span>
+        <button id="btn-select-none" class="link-btn" type="button">全不选</button>
+        <span class="link-sep">/</span>
+        <button id="btn-select-invert" class="link-btn" type="button">反选</button>
+      </div>
+    </div>
+
+    <div class="panel-subhead">
+      <span id="pool-hint" class="hint">还没有图片。点上方「添加图片…」或「添加文件夹…」。</span>
+      <button id="btn-reset-order" class="link-btn is-hidden" type="button">还原排序</button>
+    </div>
+
+    <div class="pool-list" id="pool-list" tabindex="0" aria-label="图片列表，可拖拽调整顺序"></div>
+
+    <div class="panel-foot">
+      <span class="foot-label">顺序 = 导出顺序</span>
+      <span class="foot-dim">决定 PDF 页序与重命名编号</span>
+    </div>
+  </aside>
+
+  <!-- ── 右侧：四个互不干扰的功能分区 ──────────────────────────── -->
+  <section class="panel panel-main">
+
+    <nav class="tabs" role="tablist">
+      <button class="tab is-active" type="button" role="tab" data-tab="shell">
+        <span class="tab-icon">✎</span><span class="tab-name">批量重命名</span>
+      </button>
+      <button class="tab" type="button" role="tab" data-tab="resize">
+        <span class="tab-icon">⤢</span><span class="tab-name">改分辨率</span>
+      </button>
+      <button class="tab" type="button" role="tab" data-tab="format">
+        <span class="tab-icon">⇄</span><span class="tab-name">转格式</span>
+      </button>
+      <button class="tab" type="button" role="tab" data-tab="pdf">
+        <span class="tab-icon">▤</span><span class="tab-name">导出 PDF</span>
+      </button>
+      <div class="tab-hint" id="tab-hint"></div>
+    </nav>
+
+    <div class="tab-body">
+
+      <!-- ═══ 分区一：批量重命名 ═══════════════════════════════ -->
+      <div class="tab-panel is-active" data-panel="shell">
+        <div class="sec">
+          <h3 class="sec-title">重命名规则</h3>
+          <p class="sec-desc">
+            规则按从上到下的顺序依次生效，每一条都能单独关掉。
+            右边实时显示改名结果，有重名会标红并阻止执行。
+          </p>
+
+          <div class="rule">
+            <label class="check-inline rule-head">
+              <input type="checkbox" id="rn-replace-on">
+              <span class="rule-name">① 查找替换</span>
+            </label>
+            <div class="rule-body">
+              <div class="grid-2">
+                <label class="field">
+                  <span class="field-label">查找</span>
+                  <input type="text" id="rn-find" class="input" placeholder="要替换掉的文字">
+                </label>
+                <label class="field">
+                  <span class="field-label">替换为</span>
+                  <input type="text" id="rn-replace" class="input" placeholder="留空则删除">
+                </label>
+              </div>
+              <div class="radio-row">
+                <label class="radio-pill"><input type="checkbox" id="rn-regex"><span>按正则表达式</span></label>
+                <label class="radio-pill"><input type="checkbox" id="rn-case"><span>区分大小写</span></label>
+              </div>
+            </div>
+          </div>
+
+          <div class="rule">
+            <label class="check-inline rule-head">
+              <input type="checkbox" id="rn-prefix-on">
+              <span class="rule-name">② 加前缀 / 后缀</span>
+            </label>
+            <div class="rule-body">
+              <div class="grid-2">
+                <label class="field">
+                  <span class="field-label">前缀</span>
+                  <input type="text" id="rn-prefix" class="input" placeholder="例如 out_">
+                </label>
+                <label class="field">
+                  <span class="field-label">后缀</span>
+                  <input type="text" id="rn-suffix" class="input" placeholder="例如 _final">
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="rule">
+            <label class="check-inline rule-head">
+              <input type="checkbox" id="rn-number-on">
+              <span class="rule-name">③ 重新编号</span>
+            </label>
+            <div class="rule-body">
+              <div class="grid-4">
+                <label class="field">
+                  <span class="field-label">起始值</span>
+                  <input type="number" id="rn-start" class="input" value="1" min="0">
+                </label>
+                <label class="field">
+                  <span class="field-label">步长</span>
+                  <input type="number" id="rn-step" class="input" value="1" min="1">
+                </label>
+                <label class="field">
+                  <span class="field-label">补零位数</span>
+                  <input type="number" id="rn-pad" class="input" value="3" min="1" max="12">
+                </label>
+                <label class="field">
+                  <span class="field-label">分隔符</span>
+                  <input type="text" id="rn-sep" class="input" value="_">
+                </label>
+              </div>
+              <div class="grid-2">
+                <label class="field">
+                  <span class="field-label">编号位置</span>
+                  <select id="rn-pos" class="input">
+                    <option value="suffix">放在名字后面</option>
+                    <option value="prefix">放在名字前面</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span class="field-label">编号方向</span>
+                  <select id="rn-order" class="input">
+                    <option value="asc">升序（首张最小）</option>
+                    <option value="desc">降序（首张最大）</option>
+                  </select>
+                </label>
+              </div>
+              <p class="sec-hint" id="rn-number-preview"></p>
+            </div>
+          </div>
+        </div>
+
+        <div class="sec">
+          <h3 class="sec-title">改名预览</h3>
+          <p class="sec-desc" id="rn-summary">添加图片后这里会显示结果。</p>
+          <div class="rename-preview" id="rn-preview"></div>
+        </div>
+
+        <div class="run-bar">
+          <div class="run-status" id="rn-status">先添加图片。</div>
+          <button class="btn btn-run" type="button" id="rn-run" disabled>导出重命名后的 ZIP</button>
+        </div>
+      </div>
+
+      <!-- ═══ 分区二：改分辨率 ═════════════════════════════════ -->
+      <div class="tab-panel" data-panel="resize">
+        <div class="sec">
+          <h3 class="sec-title">缩放方式</h3>
+          <p class="sec-desc">
+            只能填一个方向，另一边永远按原比例算出来——所以输出的宽高比必然和原图一致，不存在拉伸变形。
+          </p>
+
+          <div class="radio-row">
+            <label class="radio-pill">
+              <input type="radio" name="rs-mode" value="width" checked><span>按宽度</span>
+            </label>
+            <label class="radio-pill">
+              <input type="radio" name="rs-mode" value="height"><span>按高度</span>
+            </label>
+            <label class="radio-pill">
+              <input type="radio" name="rs-mode" value="percent"><span>按百分比</span>
+            </label>
+          </div>
+
+          <div class="input-row rs-value-row">
+            <input type="number" id="rs-value" class="input" value="1920" min="1">
+            <span class="unit-tag" id="rs-unit">px</span>
+          </div>
+
+          <div class="preset-row" id="rs-presets"></div>
+
+          <p class="sec-hint" id="rs-hint"></p>
+
+          <label class="check-block">
+            <input type="checkbox" id="rs-upscale">
+            <span class="check-text">允许把小于目标的图片放大</span>
+          </label>
+          <p class="sec-hint">默认关闭：800px 的图设成 1920px 只会变糊，不如保持原样。</p>
+        </div>
+
+        <div class="run-bar">
+          <div class="run-status" id="rs-status">先添加图片。</div>
+          <button class="btn btn-run" type="button" id="rs-run" disabled>导出改好的 ZIP</button>
+        </div>
+      </div>
+
+      <!-- ═══ 分区三：转格式 ═══════════════════════════════════ -->
+      <div class="tab-panel" data-panel="format">
+        <div class="sec">
+          <h3 class="sec-title">输出格式</h3>
+          <div class="preset-row" id="fm-formats"></div>
+
+          <label class="field fm-quality">
+            <span class="field-label">质量</span>
+            <div class="input-row">
+              <input type="number" id="fm-quality" class="input" value="92" min="1" max="100">
+              <span class="unit-tag">%</span>
+            </div>
+          </label>
+          <p class="sec-hint" id="fm-hint"></p>
+        </div>
+
+        <div class="sec">
+          <h3 class="sec-title">文件后缀</h3>
+          <label class="check-block">
+            <input type="checkbox" id="fm-keep-ext" checked>
+            <span class="check-text">自动把后缀换成新格式（.jpg / .png / .webp）</span>
+          </label>
+          <p class="sec-hint">关掉的话，ZIP 里的文件名保持原来的后缀，但内容是转换后的格式。</p>
+        </div>
+
+        <div class="run-bar">
+          <div class="run-status" id="fm-status">先添加图片。</div>
+          <button class="btn btn-run" type="button" id="fm-run" disabled>导出转换后的 ZIP</button>
+        </div>
+      </div>
+
+      <!-- ═══ 分区四：导出 PDF ═════════════════════════════════ -->
+      <div class="tab-panel" data-panel="pdf">
+        <div class="sec">
+          <h3 class="sec-title">合并为 PDF</h3>
+          <p class="sec-desc">
+            一图一页，<strong>页面尺寸 = 图片像素尺寸</strong>（1 像素 = 1 点），和原 png2pdf 的输出一致。
+            页序就是左栏列表的顺序。
+          </p>
+
+          <div class="notice">
+            <strong>这里导出的是原图</strong>，不受「改分辨率」「转格式」两个分区的影响——四个分区互不干扰。
+            所有图片都会先解码、再重新编码成<strong>基线 JPEG</strong> 后内嵌：这是 PDF 兼容性最好的路径，
+            能避开我自己解析 PNG 时踩到的那些坑。代价是 JPEG 有轻微画质损失。
+          </div>
+
+          <label class="field">
+            <span class="field-label">输出文件名</span>
+            <div class="input-row">
+              <input type="text" id="pdf-name" class="input" placeholder="留空则自动命名">
+              <span class="ext-tag">.pdf</span>
+            </div>
+          </label>
+        </div>
+
+        <div class="sec">
+          <h3 class="sec-title">将写入的页面</h3>
+          <p class="sec-desc" id="pdf-summary">添加图片后这里会列出页序。</p>
+          <div class="page-list" id="pdf-pages"></div>
+        </div>
+
+        <div class="run-bar">
+          <div class="run-status" id="pdf-status">先添加图片。</div>
+          <button class="btn btn-run" type="button" id="pdf-run" disabled>合并为 PDF</button>
+        </div>
+      </div>
+
+    </div><!-- /tab-body -->
+
+    <div class="progress-wrap is-hidden" id="progress-wrap">
+      <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+      <div class="progress-meta">
+        <span id="progress-text" class="progress-text">准备中…</span>
+        <button id="btn-cancel" class="btn btn-ghost btn-xs" type="button">取消</button>
+      </div>
+    </div>
+
+    <div id="result-box" class="result-box is-hidden"></div>
+
+  </section>
+</main>
+
+<div class="toast-host" id="toast-host" aria-live="polite"></div>
+
+<!-- 基础工具：无依赖，必须先加载 -->
+<script src="js/util.js"></script>
+<script src="js/pdfwriter.js"></script>
+<script src="js/zipwriter.js"></script>
+<!-- 业务模块 -->
+<script src="js/state.js"></script>
+<script src="js/rename.js"></script>
+<script src="js/transform.js"></script>
+<script src="js/worker-source.js"></script>
+<script src="js/workerhost.js"></script>
+<script src="js/pdf.js"></script>
+<script src="js/pool.js"></script>
+<script src="js/sections.js"></script>
+<script src="js/exporter.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

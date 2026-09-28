@@ -1,0 +1,26 @@
+# 操作系统 / 编辑器杂物
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# 编辑器目录
+.vscode/
+.idea/
+*.sublime-*
+
+# 这个项目没有构建步骤、没有依赖，所以正常不该有这些；
+# 列在这里是为了防止误提交
+node_modules/
+dist/
+build/
+package-lock.json
+
+# 本地测试用的图片，别传上去
+test-images/
+samples/
+*.local.*
+
+# 占位废弃文件（可以删）
+.probe

@@ -1,0 +1,1229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>图片工具箱 · 自检</title>
+<style>
+  :root { --ok:#3fbf7f; --bad:#ef5f5f; --dim:#8b93a3; --line:#2c313a; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:0 0 40px; background:#14161a; color:#e6e9ef;
+         font:13px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  header { position:sticky; top:0; z-index:5; padding:14px 24px;
+           background:#1b1e24; border-bottom:1px solid var(--line); }
+  h1 { margin:0 0 3px; font-size:16px; }
+  .sub { color:var(--dim); font-size:12px; }
+  #summary { margin-top:9px; padding:8px 11px; border-radius:6px;
+             background:#101216; border:1px solid var(--line);
+             font-size:13px; font-weight:600; color:var(--dim); }
+  #summary.pass { color:var(--ok); border-color:rgba(63,191,127,.4); }
+  #summary.fail { color:var(--bad); border-color:rgba(239,95,95,.4); }
+  main { padding:18px 24px 0; max-width:1100px; }
+  .group { margin-bottom:16px; border:1px solid var(--line);
+           border-radius:8px; overflow:hidden; background:#1b1e24; }
+  .group > h2 { margin:0; padding:9px 13px; font-size:12.5px; font-weight:600;
+                background:#22262e; border-bottom:1px solid var(--line); }
+  ul { margin:0; padding:0; list-style:none; }
+  li { display:flex; gap:10px; align-items:baseline;
+       padding:6px 13px; border-bottom:1px solid #22262e;
+       font-family:ui-monospace,Consolas,"Cascadia Mono",monospace; font-size:12px; }
+  li:last-child { border-bottom:0; }
+  .mark { flex:0 0 auto; font-weight:700; }
+  li.pass .mark { color:var(--ok); }
+  li.fail .mark { color:var(--bad); }
+  li.fail { background:rgba(239,95,95,.08); }
+  .detail { margin-left:auto; text-align:right; color:var(--dim);
+            font-family:inherit; font-size:11.5px; max-width:58%; }
+  li.fail .detail { color:#f8bcbc; }
+  li { flex-wrap: wrap; }
+  .hexdump {
+    flex: 1 1 100%;
+    margin: 6px 0 2px;
+    padding: 9px 11px;
+    background:#0c0e11;
+    border:1px solid var(--line);
+    border-radius:5px;
+    color:#9fb4d0;
+    font-family:ui-monospace,Consolas,monospace;
+    font-size:11px;
+    line-height:1.45;
+    white-space:pre;
+    overflow-x:auto;
+    cursor:text;
+  }
+  .hexdump:hover { border-color: var(--dim); }
+  .note { margin:14px 0 0; color:var(--dim); font-size:12px; }
+  code { font-family:ui-monospace,Consolas,monospace;
+         background:#101216; padding:1px 5px; border-radius:3px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>图片工具箱 · 自检</h1>
+  <div class="sub">这个页面只用于开发验证，不是工具箱本体。工具箱请打开 <code>index.html</code>。</div>
+  <div id="summary">正在自检…</div>
+</header>
+<main id="out">
+  <p class="note">
+    本页加载的是 <code>js/</code> 下的真实模块（不加载 <code>app.js</code>，
+    因为它需要 index.html 的 DOM）。所有断言都是真的在跑这些模块。
+  </p>
+</main>
+
+<!-- 加载模块本体，顺序与 index.html 一致 -->
+<script src="js/util.js"></script>
+<script src="js/pdfwriter.js"></script>
+<script src="js/zipwriter.js"></script>
+<script src="js/state.js"></script>
+<script src="js/rename.js"></script>
+<script src="js/transform.js"></script>
+<script src="js/worker-source.js"></script>
+<script src="js/workerhost.js"></script>
+<script src="js/pdf.js"></script>
+<script src="js/pool.js"></script>
+<script src="js/sections.js"></script>
+<script src="js/exporter.js"></script>
+
+<script>
+(function () {
+  'use strict';
+
+  var out = document.getElementById('out');
+  var summaryEl = document.getElementById('summary');
+  var results = [];
+  var files = ['util.js', 'pdfwriter.js', 'zipwriter.js', 'state.js', 'rename.js',
+               'transform.js', 'worker-source.js', 'workerhost.js', 'pdf.js',
+               'pool.js', 'sections.js', 'exporter.js'];
+
+  /* ── 记录 ─────────────────────────────────────────────── */
+
+  function group(title) {
+    var g = document.createElement('section');
+    g.className = 'group';
+    var h = document.createElement('h2');
+    h.textContent = title;
+    g.appendChild(h);
+    var ul = document.createElement('ul');
+    g.appendChild(ul);
+    out.appendChild(g);
+    return ul;
+  }
+
+  function record(ul, ok, name, detail) {
+    var li = document.createElement('li');
+    li.className = ok ? 'pass' : 'fail';
+
+    var m = document.createElement('span');
+    m.className = 'mark';
+    m.textContent = ok ? '\u2713' : '\u2717';
+    li.appendChild(m);
+
+    var n = document.createElement('span');
+    n.textContent = name;
+    li.appendChild(n);
+
+    if (detail) {
+      var d = document.createElement('span');
+      d.className = 'detail';
+      d.textContent = detail;
+      li.appendChild(d);
+    }
+
+    ul.appendChild(li);
+    results.push(ok);
+  }
+
+  function ok(ul, name, detail) { record(ul, true, name, detail); }
+  function bad(ul, name, detail) { record(ul, false, name, detail); }
+
+  function eq(ul, name, actual, expected) {
+    if (actual === expected) ok(ul, name, '');
+    else bad(ul, name, '得到 ' + JSON.stringify(actual) + '，期望 ' + JSON.stringify(expected));
+  }
+
+  function test(ul, name, fn) {
+    try {
+      var r = fn();
+      if (r === true || r === undefined) ok(ul, name, '');
+      else if (typeof r === 'string') bad(ul, name, r);
+      else ok(ul, name, String(r));
+    } catch (e) {
+      bad(ul, name, String(e && e.message || e));
+    }
+  }
+
+  var ITB = window.ITB;
+  var U = ITB.util;
+  var pending = [];
+
+  /* ── 一、模块加载 ─────────────────────────────────────── */
+
+  var g1 = group('一、模块是否全部加载');
+  ['util', 'pdf', 'ZipWriter', 'state', 'rename', 'transform',
+   'pdfBuild', 'pool', 'sections', 'exporter', 'workerHost'].forEach(function (n) {
+    record(g1, typeof ITB[n] !== 'undefined', 'ITB.' + n,
+      typeof ITB[n] === 'undefined' ? '缺失' : '');
+  });
+
+  /* ── 二、语法检查（重新取源码编译，不执行） ───────────── */
+
+  var g2 = group('二、每个 js 文件的语法（编译但不执行）');
+  var syntaxDone = 0;
+
+  files.forEach(function (f) {
+    fetch('js/' + f, { cache: 'no-store' }).then(function (res) {
+      return res.text();
+    }).then(function (text) {
+      try {
+        /* eslint-disable no-new-func */
+        new Function(text);
+        ok(g2, f, text.length + ' 字节');
+      } catch (e) {
+        bad(g2, f, String(e && e.message || e));
+      }
+    }).catch(function () {
+      /* file:// 下 fetch 会被 CORS 拦掉，这不是工具本身的缺陷 */
+      record(g2, true, f, '跳过（file:// 下无法读取文本，改用运行结果判断）');
+    }).then(function () {
+      syntaxDone++;
+      if (syntaxDone === files.length) checkDone();
+    });
+  });
+
+  /* ── 三、排序与文件名 ─────────────────────────────────── */
+
+  var g3 = group('三、排序与文件名');
+  eq(g3, '数字感知：img2 排在 img10 前面',
+    ['img10.png', 'img2.png', 'img1.png'].sort(U.naturalCompare).join(','),
+    'img1.png,img2.png,img10.png');
+  eq(g3, '字典序：img10 排在 img2 前面',
+    ['img10.png', 'img2.png'].sort(U.lexCompare).join(','),
+    'img10.png,img2.png');
+  eq(g3, '拆扩展名', U.splitExt('a.b.png').base, 'a.b');
+  eq(g3, '扩展名统一转小写', U.splitExt('a.b.PNG').ext, '.png');
+  eq(g3, '没有扩展名', U.splitExt('README').ext, '');
+  eq(g3, '隐藏文件整体当主名', U.splitExt('.gitignore').base, '.gitignore');
+  eq(g3, '补零', U.pad(7, 3), '007');
+  eq(g3, '补零遇到更长的数字不截断', U.pad(12345, 3), '12345');
+  eq(g3, '拼回文件名', U.joinName('a', '.png'), 'a.png');
+  eq(g3, '字节格式化', U.formatBytes(1536), '1.5 KB');
+
+  /* ── 四、重命名规则引擎 ───────────────────────────────── */
+
+  var g4 = group('四、重命名规则引擎');
+  var R = ITB.rename;
+  var base = R.defaultParams();
+
+  eq(g4, '未开启任何规则：名字不变', R.applyRules('photo', 0, 3, base), 'photo');
+
+  var pPrefix = R.defaultParams();
+  pPrefix.prefixOn = true;
+  pPrefix.prefix = 'out_';
+  eq(g4, '加前缀', R.applyRules('photo', 0, 3, pPrefix), 'out_photo');
+
+  var pSuffix = R.defaultParams();
+  pSuffix.suffixOn = true;
+  pSuffix.suffix = '_final';
+  eq(g4, '加后缀', R.applyRules('photo', 0, 3, pSuffix), 'photo_final');
+
+  var pNum = R.defaultParams();
+  pNum.numberOn = true;
+  pNum.startAt = 1;
+  pNum.padTo = 3;
+  pNum.numberSep = '_';
+  eq(g4, '编号后置 + 补零', R.applyRules('a', 0, 3, pNum), 'a_001');
+  eq(g4, '编号按序号递增', R.applyRules('c', 2, 3, pNum), 'c_003');
+
+  var pNumPre = R.defaultParams();
+  pNumPre.numberOn = true;
+  pNumPre.startAt = 1;
+  pNumPre.padTo = 2;
+  pNumPre.numberPos = 'prefix';
+  pNumPre.numberSep = '-';
+  eq(g4, '编号前置', R.applyRules('a', 1, 3, pNumPre), '02-a');
+
+  var pDesc = R.defaultParams();
+  pDesc.numberOn = true;
+  pDesc.startAt = 1;
+  pDesc.padTo = 2;
+  pDesc.numberOrder = 'desc';
+  pDesc.numberSep = '';
+  eq(g4, '升序降序：首张反而是最大号', R.applyRules('a', 0, 3, pDesc), 'a03');
+
+  var pStep = R.defaultParams();
+  pStep.numberOn = true;
+  pStep.startAt = 10;
+  pStep.stepBy = 5;
+  pStep.padTo = 3;
+  pStep.numberSep = '';
+  eq(g4, '起始值 + 步长', R.applyRules('a', 2, 5, pStep), 'a020');
+
+  var pRep = R.defaultParams();
+  pRep.replaceOn = true;
+  pRep.find = 'IMG';
+  pRep.replaceWith = 'pic';
+  eq(g4, '字面量替换（忽略大小写）', R.applyRules('img_001', 0, 1, pRep), 'pic_001');
+
+  var pCase = R.defaultParams();
+  pCase.replaceOn = true;
+  pCase.find = 'IMG';
+  pCase.replaceWith = 'pic';
+  pCase.caseSensitive = true;
+  eq(g4, '区分大小写时不匹配就不替换', R.applyRules('img_001', 0, 1, pCase), 'img_001');
+
+  var pRe = R.defaultParams();
+  pRe.replaceOn = true;
+  pRe.find = '\\d+';
+  pRe.replaceWith = '#';
+  pRe.useRegex = true;
+  eq(g4, '正则替换（全局）', R.applyRules('a12b34', 0, 1, pRe), 'a#b#');
+
+  var pBad = R.defaultParams();
+  pBad.replaceOn = true;
+  pBad.find = '(';
+  pBad.useRegex = true;
+  eq(g4, '正则写错时跳过该步而不是抛异常', R.applyRules('abc', 0, 1, pBad), 'abc');
+
+  eq(g4, '重名检测忽略大小写',
+    R.findDuplicates(['a.png', 'b.png', 'A.PNG']).ok, false);
+  eq(g4, '不重名时通过',
+    R.findDuplicates(['a.png', 'b.png']).ok, true);
+
+  /* ── 五、缩放数学 ─────────────────────────────────────── */
+
+  var g5 = group('五、缩放数学');
+  var T = ITB.transform;
+
+  var rw = T.computeTarget(1920, 1080, { mode: 'width', width: 960, allowUpscale: false });
+  eq(g5, '按宽度等比，高度自动算', rw.width + 'x' + rw.height, '960x540');
+
+  var rh = T.computeTarget(1920, 1080, { mode: 'height', height: 540, allowUpscale: false });
+  eq(g5, '按高度等比，宽度自动算', rh.width + 'x' + rh.height, '960x540');
+
+  var rp = T.computeTarget(1920, 1080, { mode: 'percent', percent: 50, allowUpscale: false });
+  eq(g5, '按百分比', rp.width + 'x' + rp.height, '960x540');
+
+  var ru = T.computeTarget(800, 600, { mode: 'width', width: 1920, allowUpscale: false });
+  eq(g5, '默认禁止放大，小图保持原样', ru.width + 'x' + ru.height, '800x600');
+  eq(g5, '并标记被拦下', ru.blockedByUpscale, true);
+
+  var ru2 = T.computeTarget(800, 600, { mode: 'width', width: 1920, allowUpscale: true });
+  eq(g5, '允许放大时才放大', ru2.width + 'x' + ru2.height, '1920x1440');
+
+  var rEq = T.computeTarget(1000, 500, { mode: 'width', width: 1000, allowUpscale: false });
+  eq(g5, '目标等于原尺寸时标记为未变化', rEq.unchanged, true);
+
+  var stepsChain = [
+    { enabled: true, type: 'resize', params: { mode: 'width', width: 1000, allowUpscale: false } },
+    { enabled: true, type: 'resize', params: { mode: 'percent', percent: 50, allowUpscale: false } }
+  ];
+  var ls = T.layoutSize(4000, 2000, stepsChain);
+  eq(g5, '多步缩放链式生效 4000 → 1000 → 500', ls.width + 'x' + ls.height, '500x250');
+
+  var effSteps = T.effectiveSteps([
+    { enabled: true, type: 'format', params: { format: 'png' } },
+    { enabled: false, type: 'format', params: { format: 'jpeg' } }
+  ]);
+  eq(g5, '被停用的转格式步骤不参与', effSteps.format.params.format, 'png');
+
+  eq(g5, '格式对应的扩展名', T.extOf('jpeg'), '.jpg');
+  eq(g5, '格式对应的 MIME', T.mimeOf('webp'), 'image/webp');
+
+  var memEst = T.estimateMemory(
+    [{ width: 2000, height: 1000, id: 1 }],
+    [{ enabled: true, type: 'resize', params: { mode: 'percent', percent: 50, allowUpscale: false } }]
+  );
+  eq(g5, '内存粗估按缩放后的像素算', memEst.pixels, 1000 * 500);
+
+  /* ── 六、DEFLATE 往返 ─────────────────────────────────── */
+
+  var g6 = group('六、DEFLATE 往返（PDF 的 /FlateDecode 与 ZIP 都依赖它）');
+
+  pending.push(new Promise(function (done) {
+    if (typeof CompressionStream !== 'function' || typeof DecompressionStream !== 'function') {
+      bad(g6, 'CompressionStream 可用', '当前浏览器不支持，导出 PDF / ZIP 压缩会失败');
+      done();
+      return;
+    }
+
+    var data = new Uint8Array(2000);
+    for (var i = 0; i < data.length; i++) data[i] = (i * 37) & 0xff;
+
+    var cs = new CompressionStream('deflate-raw');
+    var cw = cs.writable.getWriter();
+    cw.write(data);
+    cw.close();
+
+    new Response(cs.readable).arrayBuffer().then(function (buf) {
+      var comp = new Uint8Array(buf);
+      ok(g6, 'deflate-raw 压缩成功', data.length + ' → ' + comp.length + ' 字节');
+
+      var ds = new DecompressionStream('deflate-raw');
+      var dw = ds.writable.getWriter();
+      dw.write(comp);
+      dw.close();
+      return new Response(ds.readable).arrayBuffer();
+    }).then(function (buf) {
+      var back = new Uint8Array(buf);
+      var same = back.length === data.length;
+      if (same) {
+        for (var i = 0; i < back.length; i++) {
+          if (back[i] !== data[i]) { same = false; break; }
+        }
+      }
+      record(g6, same, '解压后与原文逐字节一致', same ? '' : '内容不匹配');
+      done();
+    }).catch(function (e) {
+      bad(g6, 'DEFLATE 往返', String(e && e.message || e));
+      done();
+    });
+  }));
+
+  /* ── 七、用 canvas 真实产出的字节验证解析器 ───────────── */
+
+  var g7 = group('七、图片字节解析（输入是真 canvas 编出来的 PNG / JPEG）');
+
+  function canvasToBlob(canvas, mime, q) {
+    return new Promise(function (resolve) {
+      canvas.toBlob(function (b) { resolve(b); }, mime, q);
+    });
+  }
+
+  function blobBytes(blob) {
+    return blob.arrayBuffer().then(function (b) { return new Uint8Array(b); });
+  }
+
+  var testCanvas = document.createElement('canvas');
+  testCanvas.width = 64;
+  testCanvas.height = 48;
+  var testCtx = testCanvas.getContext('2d', { alpha: false });
+  testCtx.fillStyle = '#3366cc';
+  testCtx.fillRect(0, 0, 64, 48);
+
+  pending.push(canvasToBlob(testCanvas, 'image/png').then(function (pngBlob) {
+    return blobBytes(pngBlob).then(function (png) {
+      var info = ITB.pdf.parseImage(png);
+      record(g7, !!info && info.format === 'png', 'PNG 被识别为 PNG',
+        info ? info.format : '识别失败');
+      if (info && info.format === 'png') {
+        eq(g7, 'PNG 宽度（从 IHDR 读出）', info.width, 64);
+        eq(g7, 'PNG 高度（从 IHDR 读出）', info.height, 48);
+        eq(g7, 'PNG 色彩空间', info.colorspace, 'DeviceRGB');
+        record(g7, info.idat && info.idat.length > 0 && info.idatLength > 0,
+          'IDAT 片段被拆出来', info.idatLength + ' 字节');
+
+        var total = 0;
+        for (var i = 0; i < info.idat.length; i++) total += info.idat[i].length;
+        eq(g7, 'idatLength 与实际片段总长一致', total, info.idatLength);
+
+        /* canvas 产出的 PNG 必然是 8 位、非隔行、无 alpha（我们强制 alpha:false） */
+        eq(g7, '强制不透明的 canvas 产出无 alpha 的 PNG', info.needsFlatten, false);
+      }
+      return canvasToBlob(testCanvas, 'image/jpeg', 0.9);
+    });
+  }).then(function (jpgBlob) {
+    return blobBytes(jpgBlob).then(function (jpg) {
+      var info = ITB.pdf.parseImage(jpg);
+      record(g7, !!info && info.format === 'jpeg', 'JPEG 被识别为 JPEG',
+        info ? info.format : '识别失败');
+      if (info && info.format === 'jpeg') {
+        eq(g7, 'JPEG 宽度（从 SOF 读出）', info.width, 64);
+        eq(g7, 'JPEG 高度（从 SOF 读出）', info.height, 48);
+        eq(g7, 'JPEG 色彩空间', info.colorspace, 'DeviceRGB');
+      }
+      eq(g7, '无法识别的字节返回 null 而不是抛异常',
+        ITB.pdf.parseImage(new Uint8Array([1, 2, 3])), null);
+      eq(g7, '空字节也不抛异常',
+        ITB.pdf.parseImage(new Uint8Array(0)), null);
+    });
+  }).catch(function (e) {
+    bad(g7, '解析测试本身出错', String(e && e.message || e));
+  }));
+
+  /* ── 八、PDF 结构 ─────────────────────────────────────── */
+
+  var g8 = group('八、PDF 结构（自研写出器）');
+
+  var pdfCanvas = document.createElement('canvas');
+  pdfCanvas.width = 40;
+  pdfCanvas.height = 30;
+  var pdfCtx = pdfCanvas.getContext('2d', { alpha: false });
+  pdfCtx.fillStyle = '#ff8800';
+  pdfCtx.fillRect(0, 0, 40, 30);
+
+  /* pdfBuild.build 现在的签名是 (items, opts)，items 里要的是 File/Blob。
+     自检里手上只有 Blob，所以包一层顺便把结果转成字节。 */
+  function buildPdfBytes(entries, opts) {
+    var items = entries.map(function (e) {
+      return {
+        name: e.name,
+        file: (typeof File === 'function')
+          ? new File([e.blob], e.name, { type: e.blob.type })
+          : e.blob
+      };
+    });
+    return ITB.pdfBuild.build(items, opts).then(function (out) {
+      return out.blob.arrayBuffer().then(function (buf) {
+        return { bytes: new Uint8Array(buf), out: out };
+      });
+    });
+  }
+
+  pending.push(canvasToBlob(pdfCanvas, 'image/png').then(function (blob) {
+    return buildPdfBytes([{ name: 'p1.png', blob: blob }], { title: 'selftest' })
+      .then(function (res) {
+        var pdf = res.bytes;
+        var outResult = res.out;
+        var text = '';
+        for (var i = 0; i < pdf.length; i++) text += String.fromCharCode(pdf[i]);
+
+        eq(g8, '文件头是 %PDF-', text.slice(0, 5), '%PDF-');
+        eq(g8, '第 6 字节是二进制标记', pdf[5], 0xE2);
+        record(g8, text.indexOf('%%EOF') > 0, '有 %%EOF 结束标记', '');
+        record(g8, text.indexOf('/Type /Catalog') > 0, '有文档目录', '');
+        record(g8, text.indexOf('/Type /Pages') > 0, '有页面树', '');
+        record(g8, text.indexOf('/Filter /FlateDecode') > 0, 'PNG 页用了 FlateDecode', '');
+        record(g8, text.indexOf('/ColorSpace /DeviceRGB') > 0, '色彩空间写对了', '');
+        record(g8, text.indexOf('/MediaBox [0 0 40 30]') > 0,
+          '页面尺寸等于图片像素（1px = 1pt）', '');
+
+        /* startxref 必须精确指向 xref 表开头 */
+        var sx = text.lastIndexOf('startxref');
+        var numMatch = /startxref\s+(\d+)/.exec(text.slice(sx));
+        var claimed = numMatch ? parseInt(numMatch[1], 10) : -1;
+        var xrefAt = text.indexOf('xref\n0 ');
+        eq(g8, 'startxref 指向的偏移刚好是 xref 表开头', claimed, xrefAt);
+
+        /* 每个对象的偏移必须严格递增，且真的落在「N 0 obj」上 */
+        var countMatch = /xref\n0 (\d+)\n/.exec(text);
+        var count = countMatch ? parseInt(countMatch[1], 10) : 0;
+        record(g8, count > 0, 'xref 声明了对象数', '共 ' + count + ' 个');
+
+        if (count > 0 && claimed === xrefAt) {
+          var rows = text.slice(xrefAt).split('\n');
+          var allGood = true;
+          var prev = -1;
+          var checked = 0;
+
+          for (var r = 2; r < 2 + count - 1 && r < rows.length; r++) {
+            var off = parseInt(rows[r].slice(0, 10), 10);
+            if (!(off > prev)) { allGood = false; break; }
+            prev = off;
+
+            var expect = String(r - 1) + ' 0 obj';
+            if (text.substr(off, expect.length) !== expect) { allGood = false; break; }
+            checked++;
+          }
+
+          record(g8, allGood && checked === count - 1,
+            '每个 xref 偏移都精确指向对应对象',
+            allGood ? '逐个核对 ' + checked + ' 个' : '偏移对不上');
+        }
+      });
+  }).catch(function (e) {
+    bad(g8, '生成并校验 PDF', String(e && e.message || e));
+  }));
+
+  /* ── 八之二、严格 PDF 校验器 ──────────────────────────────
+     不是「找找关键字在不在」，而是像真正的 PDF 阅读器那样把文件走一遍：
+     解析 xref 表、逐字节核对每个对象偏移、检查 stream/endstream 的长度
+     声明是否与实际字节数精确吻合、把正文里的对象都找出来。
+     任何一步对不上，都会直接指出行号/偏移，而不是只说「打不开」。
+     ──────────────────────────────────────────────────────── */
+
+  function pdfLint(pdf) {
+    var problems = [];
+    var text = '';
+    for (var i = 0; i < pdf.length; i++) text += String.fromCharCode(pdf[i]);
+
+    /* 1. 头部 */
+    if (text.slice(0, 5) !== '%PDF-') problems.push('缺少 %PDF- 文件头');
+
+    /* 2. %%EOF 必须在最末尾附近 */
+    var eofAt = text.lastIndexOf('%%EOF');
+    if (eofAt < 0) problems.push('缺少 %%EOF');
+    else if (text.length - (eofAt + 5) > 4) {
+      problems.push('%%EOF 之后还有 ' + (text.length - eofAt - 5) + ' 字节多余内容');
+    }
+
+    /* 3. startxref 的值 */
+    var sxAt = text.lastIndexOf('startxref');
+    if (sxAt < 0) { problems.push('缺少 startxref'); return { problems: problems }; }
+
+    var m = /startxref\s+(\d+)/.exec(text.slice(sxAt));
+    if (!m) { problems.push('startxref 后面不是合法数字'); return { problems: problems }; }
+
+    var xrefOffset = parseInt(m[1], 10);
+    if (text.substr(xrefOffset, 4) !== 'xref') {
+      problems.push('startxref 指向的偏移 ' + xrefOffset + ' 处不是 "xref"（实际是 "' +
+        text.substr(xrefOffset, 8).replace(/[^\x20-\x7e]/g, '?') + '"）');
+      return { problems: problems };
+    }
+
+    /* 4. 手动解析 xref 表：像阅读器那样逐字段读，而不是靠正则猜 */
+    var p = xrefOffset + 4;                       // 跳过 "xref"
+    while (text[p] === '\r' || text[p] === '\n' || text[p] === ' ') p++;
+
+    var sub = /^(\d+)\s+(\d+)/.exec(text.slice(p));
+    if (!sub) { problems.push('xref 子段头解析失败'); return { problems: problems }; }
+
+    var firstObj = parseInt(sub[1], 10);
+    var objCount = parseInt(sub[2], 10);
+    p += sub[0].length;
+    if (text[p] === '\r') p++;
+    if (text[p] === '\n') p++;
+
+    if (firstObj !== 0) problems.push('xref 首个对象号不是 0，而是 ' + firstObj);
+
+    var offsets = {};
+    for (var k = 0; k < objCount; k++) {
+      var entry = text.substr(p, 20);
+      if (entry.length < 20) { problems.push('第 ' + k + ' 条 xref 条目不足 20 字节'); break; }
+
+      // 20 字节一条：10 位偏移 + 空格 + 5 位世代号 + 空格 + 1 字节类型 + 2 字节 EOL
+      if (!/^\d{10} \d{5} [nf]/.test(entry)) {
+        problems.push('第 ' + k + ' 条 xref 条目格式不对：' + JSON.stringify(entry));
+      }
+      if (entry[17] !== ' ' || (entry[18] !== '\r' && entry[18] !== '\n')) {
+        problems.push('第 ' + k + ' 条 xref 条目结尾不是「空格 + 换行」');
+      }
+
+      offsets[firstObj + k] = {
+        off: parseInt(entry.slice(0, 10), 10),
+        type: entry.charAt(17)
+      };
+      p += 20;
+    }
+
+    // 逐个数：每个 in-use 对象的偏移必须精确落在「N 0 obj」上
+    var objIds = Object.keys(offsets);
+    for (var q = 0; q < objIds.length; q++) {
+      var id = objIds[q];
+      var rec = offsets[id];
+      if (id === '0') continue;
+      var expect = id + ' 0 obj';
+      var actual = text.substr(rec.off, expect.length);
+      if (actual !== expect) {
+        problems.push('对象 ' + id + ' 的 xref 偏移 ' + rec.off +
+          ' 处实际是 ' + JSON.stringify(actual) + '，应为 ' + JSON.stringify(expect));
+      }
+    }
+
+    /* 5. trailer */
+    var trAt = text.indexOf('trailer', p - 20 > 0 ? p - 20 : 0);
+    if (trAt < 0 || trAt > p + 200) problems.push('xref 表之后没有紧跟 trailer');
+    else {
+      var trText = text.slice(trAt, trAt + 400);
+      var sizeM = /\/Size\s+(\d+)/.exec(trText);
+      if (!sizeM) problems.push('trailer 里缺少 /Size');
+      else if (parseInt(sizeM[1], 10) !== objCount) {
+        problems.push('trailer 的 /Size=' + sizeM[1] + ' 与 xref 声明的对象数 ' + objCount + ' 不一致');
+      }
+      if (!/\/Root\s+\d+\s+\d+\s+R/.test(trText)) problems.push('trailer 里缺少 /Root');
+    }
+
+    /* 5. 字典里不允许出现 undefined / NaN / null 这种字面量——
+          一旦写进 PDF，阅读器就完全打不开。这是最容易出、
+          又最难看出来的错误，所以专门查一遍。 */
+    var badLit = /\/(Length|Width|Height|Size|Count|BitsPerComponent)\s+(undefined|NaN|null)\b/g;
+    var bl;
+    while ((bl = badLit.exec(text)) !== null) {
+      var lineNo = text.slice(0, bl.index).split('\n').length;
+      problems.push('第 ' + lineNo + ' 行出现非法值：' + JSON.stringify(bl[0]));
+    }
+
+    /* 6. 每个 stream：按真正的阅读器那样，用 /Length 定位数据末尾，
+          再看那里是不是恰好跟着 endstream。靠自己搜 endstream 关键字
+          是不对的——万一数据里出现这个词就会错位。 */
+    var streams = [];
+    var re = /<<((?:[^<>]|<<[^>]*>>)*)>>\s*stream(\r\n|\r|\n)/g;
+    var sm;
+
+    while ((sm = re.exec(text)) !== null) {
+      var dictStart = sm.index;
+      var dict = sm[1];
+      var dataStart = re.lastIndex;              // sm[2] 是 stream 后的换行
+      var lenM = /\/Length\s+(\d+)/.exec(dict);
+
+      if (!lenM) {
+        problems.push('偏移 ' + dictStart + ' 的 stream 字典里没有 /Length');
+        continue;
+      }
+
+      var declared = parseInt(lenM[1], 10);
+      var after = dataStart + declared;
+
+      if (after > text.length) {
+        problems.push('偏移 ' + dictStart + ' 的 stream 声明 /Length=' + declared +
+          '，但文件只剩 ' + (text.length - dataStart) + ' 字节');
+        continue;
+      }
+
+      // /Length 之后允许出现空白，然后必须是 endstream
+      var tail = text.slice(after, after + 12);
+      if (!/^\s*endstream/.test(tail)) {
+        problems.push('偏移 ' + dictStart + ' 的 stream 在 /Length 指定的位置（' + after +
+          '）之后不是 endstream，而是 ' +
+          JSON.stringify(tail.slice(0, 12).replace(/[^\x20-\x7e]/g, '?')));
+      }
+
+      var fM = /\/Filter\s+\/(\w+)/.exec(dict);
+      streams.push({
+        filter: fM ? fM[1] : null,
+        dict: dict,
+        dataStart: dataStart,
+        length: declared
+      });
+    }
+
+    /* 7. 每张图片的内嵌声明 */
+    var imgDicts = [];
+    var ire = /\/Subtype\s*\/Image/g;
+    var im;
+    while ((im = ire.exec(text)) !== null) {
+      var ctx = text.slice(Math.max(0, im.index - 300), im.index + 300);
+      imgDicts.push(ctx);
+    }
+
+    return {
+      problems: problems,
+      xrefOffset: xrefOffset,
+      objCount: objCount,
+      objectOffsets: offsets,
+      streams: streams,
+      imageCount: imgDicts.length,
+      imageContexts: imgDicts
+    };
+  }
+
+  /* ── 八之三、用校验器实际检查两种来源产出的 PDF ────────── */
+
+  var g8b = group('八·三、严格校验：PNG 源 与 JPEG 源产出的 PDF 都要真的合法');
+
+  function hexOf(bytes, max) {
+    var out = [];
+    for (var i = 0; i < Math.min(bytes.length, max || 24); i++) {
+      out.push(('0' + bytes[i].toString(16)).slice(-2));
+    }
+    return out.join(' ');
+  }
+
+  /** 把一段字节以「偏移 | 十六进制 | 可打印字符」的形式印到页面上 */
+  function dumpHex(ul, title, pdf, start, count) {
+    var li = document.createElement('li');
+    li.className = 'pass';
+
+    var mark = document.createElement('span');
+    mark.className = 'mark';
+    mark.textContent = '·';
+    li.appendChild(mark);
+
+    var name = document.createElement('span');
+    name.textContent = title;
+    li.appendChild(name);
+
+    var pre = document.createElement('pre');
+    pre.className = 'hexdump';
+    var lines = [];
+    var end = Math.min(pdf.length, start + count);
+
+    for (var off = start; off < end; off += 16) {
+      var hex = [];
+      var asc = '';
+      for (var j = 0; j < 16 && off + j < end; j++) {
+        var b = pdf[off + j];
+        hex.push(('0' + b.toString(16)).slice(-2));
+        asc += (b >= 0x20 && b < 0x7f) ? String.fromCharCode(b) : '.';
+      }
+      while (hex.length < 16) hex.push('  ');
+      lines.push(padNum(off, 6) + '  ' + hex.join(' ') + '  |' + asc + '|');
+    }
+    pre.textContent = lines.join('\n');
+    li.appendChild(pre);
+
+    // 方便一键复制
+    pre.addEventListener('click', function () {
+      try {
+        var range = document.createRange();
+        range.selectNodeContents(pre);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch (e) { /* 选中失败就算了，手动拖选也可以 */ }
+    });
+    pre.title = '点一下可以全选，方便复制';
+
+    ul.appendChild(li);
+  }
+
+  function padNum(n, width) {
+    var s = String(n);
+    while (s.length < width) s = '0' + s;
+    return s;
+  }
+
+  function runLint(ul, label, pdf, done) {
+    var report = pdfLint(pdf);
+
+    record(ul, report.problems.length === 0,
+      label + '：结构检查',
+      report.problems.length ? report.problems.slice(0, 3).join(' / ') : '无问题');
+
+    if (report.problems.length) {
+      if (window.console && console.error) {
+        console.error('[pdfLint] ' + label, report.problems, report);
+      }
+    }
+
+    /* 无论对错都印一段十六进制转储：出问题时我能直接看字节，
+       不用让你把二进制文件发给我 */
+    dumpHex(ul, label + '：前 320 字节', pdf, 0, 320);
+    dumpHex(ul, label + '：最后 120 字节', pdf, Math.max(0, pdf.length - 120), 120);
+
+    if (report.problems.length) {
+      done();
+      return;
+    }
+
+    record(ul, report.imageCount === 1, label + '：正好内嵌 1 张图',
+      '实际 ' + report.imageCount + ' 张');
+
+    var flate = report.streams.filter(function (s) { return s.filter === 'FlateDecode'; });
+    eq(ul, label + '：有 1 个 FlateDecode 流', flate.length, 1);
+
+    if (!flate.length) { done(); return; }
+
+    /* 真正解压一遍，确认阅读器能把它读成原始像素数据 */
+    var s = flate[0];
+    var raw = pdf.slice(s.dataStart, s.dataStart + s.length);
+
+    var ds = new DecompressionStream('deflate-raw');
+    var w = ds.writable.getWriter();
+    w.write(raw);
+    w.close();
+
+    new Response(ds.readable).arrayBuffer().then(function (buf) {
+      var raw2 = new Uint8Array(buf);
+      record(ul, raw2.length > 0, label + '：FlateDecode 流能被解压',
+        raw2.length + ' 字节原始数据');
+
+      /* 解压出来的应该是 PNG 的 IDAT 内容：每行 1 字节滤波器 + 行像素。
+         这里只验证长度符合 PNG 原始扫描线的规定长度。 */
+      var wm = /\/Width\s+(\d+)/.exec(s.dict);
+      var hm = /\/Height\s+(\d+)/.exec(s.dict);
+      var cm = /\/ColorSpace\s+\/(\w+)/.exec(s.dict);
+
+      if (wm && hm && cm) {
+        var W = parseInt(wm[1], 10);
+        var H = parseInt(hm[1], 10);
+        var ch = (cm[1] === 'DeviceRGB') ? 3 : 1;
+        var expect = H * (1 + W * ch);
+        eq(ul, label + '：解压后长度等于 PNG 原始扫描线长度', raw2.length, expect);
+      }
+      done();
+    }).catch(function (e) {
+      bad(ul, label + '：FlateDecode 流无法解压', String(e && e.message || e));
+      done();
+    });
+  }
+
+  pending.push((function () {
+    var png = document.createElement('canvas');
+    png.width = 40;
+    png.height = 30;
+    var pc = png.getContext('2d', { alpha: false });
+    pc.fillStyle = '#ff8800';
+    pc.fillRect(0, 0, 40, 30);
+
+    var jpg = document.createElement('canvas');
+    jpg.width = 60;
+    jpg.height = 45;
+    var jc = jpg.getContext('2d', { alpha: false });
+    jc.fillStyle = '#1188cc';
+    jc.fillRect(0, 0, 60, 45);
+
+    var pngBlob = null;
+    var jpgBlob = null;
+
+    function checkOne(label, expectW, expectH) {
+      return buildPdfBytes([{ name: label, blob: pngBlob }], { title: 'lint' })
+        .then(function (res) {
+          var pdf = res.bytes;
+          var report = pdfLint(pdf);
+
+          record(g8b, report.problems.length === 0, label + '：结构检查',
+            report.problems.length ? report.problems.slice(0, 3).join(' / ') : '无问题');
+
+          /* 现在所有图都统一重编码成基线 JPEG 内嵌 —— 这是刻意的，
+             为的是绕开自己解析 PNG 流的那一堆坑 */
+          var text = '';
+          for (var i = 0; i < pdf.length; i++) text += String.fromCharCode(pdf[i]);
+          record(g8b, text.indexOf('/Filter /DCTDecode') > 0,
+            label + '：图片用 DCTDecode 内嵌（基线 JPEG）', '');
+          record(g8b, text.indexOf('/MediaBox [0 0 ' + expectW + ' ' + expectH + ']') > 0,
+            label + '：页面尺寸 ' + expectW + '×' + expectH, '');
+
+          if (report.problems.length) {
+            dumpHex(g8b, label + '：前 200 字节', pdf, 0, 200);
+          }
+          return res;
+        });
+    }
+
+    return canvasToBlob(png, 'image/png')
+      .then(function (b) { pngBlob = b; return canvasToBlob(jpg, 'image/jpeg', 0.9); })
+      .then(function (b) { jpgBlob = b; return checkOne('PNG 源 → PDF', 40, 30); })
+      .then(function () {
+        /* 再走一遍低层写出器：手动塞一页 JPEG，并核对字节原样搬运 */
+        return jpgBlob.arrayBuffer().then(function (srcBuf) {
+          var src = new Uint8Array(srcBuf);
+          var info = ITB.pdf.parseImage(src);
+          if (!info) { bad(g8b, 'JPEG 源能被解析', ''); return null; }
+
+          var w = new ITB.pdf.PdfWriter();
+          w.setMeta({ title: 'jpeg-lint' });
+          w.addJpegPage(src, info.width, info.height, info.colorspace, 'b.jpg');
+
+          return w.build().then(function (o) {
+            return o.blob.arrayBuffer().then(function (pb) {
+              var pdf = new Uint8Array(pb);
+              var report = pdfLint(pdf);
+
+              record(g8b, report.problems.length === 0, 'JPEG 源：结构检查',
+                report.problems.length ? report.problems.slice(0, 3).join(' / ') : '无问题');
+
+              var text = '';
+              for (var i = 0; i < pdf.length; i++) text += String.fromCharCode(pdf[i]);
+
+              /* 把 JPEG 原始字节从 PDF 里抠出来，和源文件逐字节比对 */
+              var dst = text.indexOf('/DCTDecode');
+              var sAt = text.indexOf('stream', dst) + 6;
+              if (text[sAt] === '\r') sAt++;
+              if (text[sAt] === '\n') sAt++;
+              var eAt = text.indexOf('endstream', sAt);
+              var embedded = pdf.slice(sAt, eAt - 1);   // 减去结尾那个分隔换行
+
+              eq(g8b, 'JPEG 源：内嵌字节数等于源文件', embedded.length, src.length);
+
+              var same = embedded.length === src.length;
+              if (same) {
+                for (var j = 0; j < src.length; j++) {
+                  if (embedded[j] !== src[j]) { same = false; break; }
+                }
+              }
+              record(g8b, same, 'JPEG 源：内嵌字节与源文件逐字节一致',
+                same ? '' : '开头：' + hexOf(embedded) + ' vs ' + hexOf(src));
+            });
+          });
+        });
+      });
+  })().catch(function (e) {
+    bad(g8b, '严格校验本身出错', String(e && e.message || e));
+  }));
+
+  /* ── 八之四、用 pdf.js 实际解析一遍（可选，需要联网） ────
+     前面所有检查都是我自己写的，可能有共同的盲区。
+     这一段把生成的 PDF 交给 pdf.js —— Mozilla 的 PDF 引擎，
+     也就是 Firefox 内置的那个 —— 让它真的解析一遍。
+     它能读出页数和尺寸，就说明 PDF 对独立实现也是合法的。
+     离线或 CDN 不通时优雅跳过，不影响其他结果。
+     ──────────────────────────────────────────────────────── */
+
+  var g8c = group('八·四、独立实现验证：交给 pdf.js 实际解析（需要联网，离线自动跳过）');
+
+  function loadScript(url) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = url;
+      s.onload = function () { resolve(); };
+      s.onerror = function () { reject(new Error('加载失败：' + url)); };
+      document.head.appendChild(s);
+    });
+  }
+
+  pending.push((function () {
+    var canvas = document.createElement('canvas');
+    canvas.width = 70;
+    canvas.height = 55;
+    var c = canvas.getContext('2d', { alpha: false });
+    c.fillStyle = '#8844dd';
+    c.fillRect(0, 0, 70, 55);
+
+    var pdfUrl = null;
+    var pngBlob = null;
+
+    return canvasToBlob(canvas, 'image/png').then(function (blob) {
+      pngBlob = blob;
+      return ITB.pdfBuild.build(
+        [{ name: 'pdfjs.png', file: new File([blob], 'pdfjs.png', { type: 'image/png' }) }],
+        { title: 'pdfjs' }
+      );
+    }).then(function (out) {
+      pdfUrl = URL.createObjectURL(out.blob);
+
+      return Promise.all([
+        loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js')
+          .then(function () { return null; })
+          .catch(function (e) { return e; })
+      ]);
+    }).then(function (loadErr) {
+      if (loadErr) {
+        record(g8c, true, '跳过：无法加载 pdf.js（离线或 CDN 不通）',
+          String(loadErr.message || loadErr));
+        return null;
+      }
+
+      var lib = window.pdfjsLib;
+      if (!lib) {
+        record(g8c, true, '跳过：pdf.js 没有挂到 window.pdfjsLib', '');
+        return null;
+      }
+
+      // worker 也走 CDN；加载不了就让 pdf.js 退回主线程解析
+      try {
+        lib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      } catch (e) { /* 无所谓 */ }
+
+      return lib.getDocument({ url: pdfUrl }).promise.then(function (doc) {
+        eq(g8c, 'pdf.js 读出的页数', doc.numPages, 1);
+
+        return doc.getPage(1).then(function (page) {
+          var vp = page.getViewport({ scale: 1 });
+          eq(g8c, 'pdf.js 读出的页面宽度', Math.round(vp.width), 70);
+          eq(g8c, 'pdf.js 读出的页面高度', Math.round(vp.height), 55);
+
+          /* 真正把图片解码出来：这一步会解 /FlateDecode 并还原像素。
+             能跑到这里，说明 PDF 不光是结构合法，图像数据也是有效的。 */
+          return page.getOperatorList().then(function () {
+            return null;
+          });
+        });
+      }).then(function () {
+        record(g8c, true, 'pdf.js 成功解析并读出页面', 'PDF 对独立实现是合法的');
+      }).catch(function (e) {
+        bad(g8c, 'pdf.js 解析失败', String(e && e.message || e));
+      });
+    }).catch(function (e) {
+      bad(g8c, 'pdf.js 校验本身出错', String(e && e.message || e));
+    }).then(function () {
+      if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+    });
+  })());
+
+  /* ── 九、ZIP 结构 ─────────────────────────────────────── */
+
+  var g9 = group('九、ZIP 结构（自研写出器）');
+
+  pending.push((function () {
+    var zw = new ITB.ZipWriter();
+    var payload = new Uint8Array(500);
+    for (var i = 0; i < payload.length; i++) payload[i] = (i * 13) & 0xff;
+
+    return zw.add('普通文件.bin', payload, true).then(function () {
+      return zw.add('子目录/nested.bin', payload, false);
+    }).then(function () {
+      var blob = zw.build();
+      return blob.arrayBuffer().then(function (buf) {
+        var z = new Uint8Array(buf);
+        var text = '';
+        for (var i = 0; i < z.length; i++) text += String.fromCharCode(z[i]);
+
+        var localSig = (z[0] | (z[1] << 8) | (z[2] << 16) | (z[3] << 24)) >>> 0;
+        eq(g9, '开头是本地文件头签名 0x04034b50', localSig, 0x04034b50);
+
+        record(g9, text.indexOf('PK\x01\x02') > 0, '有中央目录', '');
+        record(g9, text.indexOf('PK\x05\x06') > 0, '有结束记录', '');
+
+        var eocdAt = text.lastIndexOf('PK\x05\x06');
+        var cdOffset = z[eocdAt + 16] | (z[eocdAt + 17] << 8) |
+                       (z[eocdAt + 18] << 16) | (z[eocdAt + 19] << 24);
+
+        var cdSig = text.charCodeAt(cdOffset) === 0x50 &&
+                    text.charCodeAt(cdOffset + 1) === 0x4b &&
+                    text.charCodeAt(cdOffset + 2) === 0x01 &&
+                    text.charCodeAt(cdOffset + 3) === 0x02;
+        record(g9, cdSig, 'EOCD 里的中央目录偏移指向正确位置', '偏移 ' + cdOffset);
+
+        var entryCount = z[eocdAt + 10] | (z[eocdAt + 11] << 8);
+        eq(g9, '结束记录里的条目数', entryCount, 2);
+        eq(g9, '总字节数与 Blob 大小一致', z.length, blob.size);
+
+        var utf8Flag = (z[6] | (z[7] << 8)) & 0x0800;
+        eq(g9, '通用标志位置了 bit 11（文件名是 UTF-8）', utf8Flag, 0x0800);
+
+        var nameBytes = [];
+        for (var k = 30; k < z.length && k < 30 + 60; k++) {
+          if (z[k] === 0) break;
+          nameBytes.push(z[k]);
+        }
+        var decoded = new TextDecoder('utf-8').decode(new Uint8Array(nameBytes));
+        eq(g9, '中文条目名能按 UTF-8 解回来', decoded, '普通文件.bin');
+
+        var method = z[8] | (z[9] << 8);
+        eq(g9, '可压缩内容用了 deflate（方法 8）', method, 8);
+      });
+    });
+  })().catch(function (e) {
+    bad(g9, '生成并校验 ZIP', String(e && e.message || e));
+  }));
+
+  /* ── 十、带透明通道的 PNG 垫白底 → PDF（最复杂的一条路） ── */
+
+  var g10 = group('十、带 alpha 的 PNG：垫白底后写入 PDF');
+
+  var alphaCanvas = document.createElement('canvas');
+  alphaCanvas.width = 50;
+  alphaCanvas.height = 40;
+  // 默认就是带 alpha 的上下文，画一个半透明方块 + 一小块全透明
+  var alphaCtx = alphaCanvas.getContext('2d');
+  alphaCtx.clearRect(0, 0, 50, 40);
+  alphaCtx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+  alphaCtx.fillRect(0, 0, 25, 40);
+
+  pending.push(canvasToBlob(alphaCanvas, 'image/png').then(function (blob) {
+    return blobBytes(blob).then(function (bytes) {
+      var info = ITB.pdf.parseImage(bytes);
+      eq(g10, '带 alpha 的 PNG 颜色类型是 6', bytes[25], 6);
+      record(g10, !!info && info.needsFlatten === true,
+        '解析器认出它需要垫白底',
+        info ? 'reason=' + info.reason : '识别失败');
+
+      return buildPdfBytes([{ name: 'alpha.png', blob: blob }], { title: 'alpha-test' })
+        .then(function (res) {
+          var pdf = res.bytes;
+          eq(g10, '成功产出 1 页', res.out.pages, 1);
+          record(g10, pdf.length > 0, '非空 PDF', ITB.util.formatBytes(pdf.length));
+
+          var text = '';
+          for (var i = 0; i < pdf.length; i++) text += String.fromCharCode(pdf[i]);
+
+          record(g10, text.indexOf('/MediaBox [0 0 50 40]') > 0,
+            '页面尺寸正确 50x40', '');
+
+          /* 现在统一重编码成基线 JPEG 内嵌，透明已经在 JPEG 编码前垫成白色 */
+          record(g10, text.indexOf('/Filter /DCTDecode') > 0,
+            '图片以 DCTDecode（基线 JPEG）内嵌', '');
+
+          var report = pdfLint(pdf);
+          record(g10, report.problems.length === 0, '带 alpha 的图产出的 PDF 结构合法',
+            report.problems.length ? report.problems.slice(0, 2).join(' / ') : '无问题');
+
+          /* 关键：垫白底之后必须不再带 alpha。JPEG 本身没有 alpha 通道，
+             但色彩空间如果写错成 DeviceGray 就会丢掉颜色。 */
+          var m = /\/ColorSpace \/(\w+)/.exec(text);
+          eq(g10, '色彩空间是 DeviceRGB', m ? m[1] : '(没找到)', 'DeviceRGB');
+        });
+    });
+  }).catch(function (e) {
+    bad(g10, '带 alpha 的 PNG 走通 PDF', String(e && e.message || e));
+  }));
+
+  /* ── 十一、端到端：改分辨率分区 + 导出 PDF 分区 ─────────── */
+
+  var g11 = group('十一、端到端（改分辨率导 ZIP / 导出 PDF 两条独立出口）');
+
+  var e2eCanvas = document.createElement('canvas');
+  e2eCanvas.width = 400;
+  e2eCanvas.height = 300;
+  var e2eCtx = e2eCanvas.getContext('2d', { alpha: false });
+  e2eCtx.fillStyle = '#22aa66';
+  e2eCtx.fillRect(0, 0, 400, 300);
+
+  pending.push(canvasToBlob(e2eCanvas, 'image/png').then(function (blob) {
+    var f = new File([blob], 'sample.png', { type: 'image/png' });
+    var fileItem = {
+      id: 1, file: f, name: 'sample.png', relPath: '', size: f.size,
+      type: 'image/png', width: 400, height: 300, measured: true, selected: true
+    };
+
+    var hasWorker = ITB.workerHost.hasWorker();
+    record(g11, true, 'Worker 可用性',
+      hasWorker ? '支持 Worker，像素处理在后台线程' : '不支持，已退回主线程串行');
+
+    /* 直接把这一张塞进文件池和 state，然后调用真实的分区导出函数 ——
+       而不是绕过 exporter 自己拼参数，这样测的才是界面真正会走的路 */
+    ITB.state.files = [fileItem];
+    ITB.state.sampleId = 1;
+    ITB.state.cancelRequested = false;
+
+    var noCancel = function () { return false; };
+
+    /* ── 改分辨率分区：400 → 200 宽，等比得到 200×150 ── */
+    return ITB.exporter.runResizeToZip(null, noCancel).then(function (zres) {
+      record(g11, !zres.cancelled, '改分辨率分区：没有被取消', '');
+      eq(g11, '改分辨率分区：ZIP 里有 1 个条目', zres.entries, 1);
+      record(g11, zres.bytes > 0, '改分辨率分区：产出了非空 ZIP',
+        U.formatBytes(zres.bytes));
+
+      /* ZIP 内部条目的名字应该是原名（这个分区不改名） */
+      return zres.blob.arrayBuffer().then(function (zb) {
+        var z = new Uint8Array(zb);
+        var text = '';
+        for (var i = 0; i < Math.min(z.length, 200); i++) text += String.fromCharCode(z[i]);
+        record(g11, text.indexOf('sample.png') > 0,
+          '改分辨率分区：ZIP 条目名保持原名 sample.png', '');
+      });
+    }).then(function () {
+      /* ── 导出 PDF 分区：应该用原图 400×300，不受缩放分区影响 ── */
+      return ITB.exporter.runPdf(null, noCancel);
+    }).then(function (pres) {
+      eq(g11, '导出 PDF 分区：页数', pres.pages, 1);
+      record(g11, pres.bytes > 0, '导出 PDF 分区：产出了非空 PDF', U.formatBytes(pres.bytes));
+
+      return pres.blob.arrayBuffer().then(function (buf) {
+        var z = new Uint8Array(buf);
+        var head = String.fromCharCode(z[0], z[1], z[2], z[3], z[4]);
+        eq(g11, '导出 PDF 分区：文件头正确', head, '%PDF-');
+
+        var text = '';
+        for (var i = 0; i < z.length; i++) text += String.fromCharCode(z[i]);
+
+        /* 分区之间互不干扰：PDF 用的是原图尺寸，不是缩放后的 200×150 */
+        record(g11, text.indexOf('/MediaBox [0 0 400 300]') > 0,
+          '导出 PDF 分区：用的是原图尺寸 400×300（不受改分辨率影响）',
+          text.indexOf('/MediaBox [0 0 400 300]') > 0 ? '' : '页面尺寸不是 400×300');
+
+        var report = pdfLint(z);
+        record(g11, report.problems.length === 0, '导出 PDF 分区：产出的 PDF 结构合法',
+          report.problems.length ? report.problems.slice(0, 2).join(' / ') : '无问题');
+      });
+    });
+  }).catch(function (e) {
+    bad(g11, '端到端执行', String(e && e.message || e));
+  }));
+
+  /* ── 收尾 ─────────────────────────────────────────────── */
+
+  var runtimeDone = false;
+
+  Promise.all(pending).then(function () {
+    runtimeDone = true;
+    checkDone();
+  }).catch(function () {
+    runtimeDone = true;
+    checkDone();
+  });
+
+  function checkDone() {
+    if (!runtimeDone || syntaxDone !== files.length) return;
+
+    var pass = 0;
+    var fail = 0;
+    for (var i = 0; i < results.length; i++) {
+      if (results[i]) pass++; else fail++;
+    }
+
+    if (fail === 0) {
+      summaryEl.className = 'pass';
+      summaryEl.textContent = '全部通过：' + pass + ' 项';
+    } else {
+      summaryEl.className = 'fail';
+      summaryEl.textContent = fail + ' 项失败 / 共 ' + (pass + fail) + ' 项（失败的已标红）';
+    }
+  }
+
+})();
+</script>
+</body>
+</html>
