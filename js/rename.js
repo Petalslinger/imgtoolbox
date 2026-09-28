@@ -1,12 +1,11 @@
 /* ============================================================
    rename.js —— 重命名规则引擎
-   纯字符串运算，不碰像素，所以几百张图也能瞬时出预览。
+   纯字符串运算，不涉及像素，因此数百张图也能即时生成预览。
 
-   规则按固定顺序叠加，每一步都能单独关掉：
+   规则按固定顺序叠加，每一步均可独立关闭：
      1. 查找替换（可选正则、可选区分大小写）
-     2. 加前缀 / 加后缀
+     2. 添加前缀
      3. 追加编号（起始值 / 步长 / 补零位数 / 升序降序 / 位置 / 分隔符）
-     4. 统一加固定后缀串（「文件名尾部」）
    ============================================================ */
 
 window.ITB = window.ITB || {};
@@ -25,11 +24,9 @@ window.ITB = window.ITB || {};
       useRegex: false,
       caseSensitive: false,
 
-      // 前后缀
+      // 前缀
       prefixOn: false,
       prefix: '',
-      suffixOn: false,
-      suffix: '',
 
       // 编号
       numberOn: false,
@@ -40,10 +37,6 @@ window.ITB = window.ITB || {};
       numberPos: 'suffix',       // 'prefix' | 'suffix'
       numberSep: '_'
     };
-  }
-
-  function isDefault(p) {
-    return !p.replaceOn && !p.prefixOn && !p.suffixOn && !p.numberOn;
   }
 
   /**
@@ -63,7 +56,7 @@ window.ITB = window.ITB || {};
           var flags = 'g' + (p.caseSensitive ? '' : 'i');
           name = name.replace(new RegExp(p.find, flags), p.replaceWith);
         } catch (e) {
-          // 正则写错了就先跳过这一步，界面上会另外标红提示
+          // 正则无效时跳过该步骤，界面另行标红提示
         }
       } else if (p.caseSensitive) {
         name = splitJoin(name, p.find, p.replaceWith);
@@ -72,9 +65,8 @@ window.ITB = window.ITB || {};
       }
     }
 
-    /* 2. 前后缀 */
+    /* 2. 前缀 */
     if (p.prefixOn && p.prefix) name = p.prefix + name;
-    if (p.suffixOn && p.suffix) name = name + p.suffix;
 
     /* 3. 编号 */
     if (p.numberOn) {
@@ -95,8 +87,8 @@ window.ITB = window.ITB || {};
     return name;
   }
 
-  /* 用一个不会误伤替换结果的方式做字面量替换：
-     先把匹配处换成占位符，最后统一填回，避免替换串里含查找串时无限套娃 */
+  /* 字面量替换：以 split/join 实现，替换结果不会被再次匹配，
+     因此替换串中包含查找串时不会产生嵌套替换 */
   function splitJoin(name, find, repl) {
     var out = name.split(find);
     return out.join(repl);
@@ -137,9 +129,9 @@ window.ITB = window.ITB || {};
   }
 
   /**
-   * 冲突检测：重命名之后是否有两个文件叫同一个名字。
-   * 纯下载模式下不会覆盖磁盘文件，但 ZIP 里重名会让条目互相顶掉，
-   * 所以照样要拦住。
+   * 冲突检测：重命名后是否存在重名。
+   * 纯下载模式不会覆盖磁盘文件，但 ZIP 中重名条目会相互覆盖，
+   * 因此仍需拦截。
    * @returns {{ok: boolean, dups: string[]}}
    */
   function findDuplicates(finalNames) {
@@ -155,7 +147,7 @@ window.ITB = window.ITB || {};
     return { ok: Object.keys(dups).length === 0, dups: Object.keys(dups) };
   }
 
-  /* ── 给步骤卡片用的一行摘要 ─────────────────────────────── */
+  /* ── 步骤卡片用的一行摘要 ───────────────────────────────── */
 
   function summarize(p) {
     var bits = [];
@@ -164,7 +156,6 @@ window.ITB = window.ITB || {};
       bits.push('「' + clip(p.find) + '」→「' + clip(p.replaceWith) + '」' + (p.useRegex ? ' 正则' : ''));
     }
     if (p.prefixOn && p.prefix) bits.push('前缀 ' + clip(p.prefix));
-    if (p.suffixOn && p.suffix) bits.push('后缀 ' + clip(p.suffix));
     if (p.numberOn) {
       var w = Math.max(1, Math.min(12, num(p.padTo, 3)));
       bits.push('编号 ' + U.pad(num(p.startAt, 1), w) +
@@ -185,7 +176,6 @@ window.ITB = window.ITB || {};
 
   ITB.rename = {
     defaultParams: defaultParams,
-    isDefault: isDefault,
     applyRules: applyRules,
     mapNames: mapNames,
     findDuplicates: findDuplicates,

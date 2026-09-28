@@ -9,21 +9,21 @@ window.ITB = window.ITB || {};
   'use strict';
 
   ITB.state = {
-    /* 文件池。顺序就是导出顺序，也就是 PDF 页序和重命名编号顺序。
-       四个分区共用这一批图——这只是「处理哪些图」，不是流水线。 */
+    /* 文件池。数组顺序即导出顺序，等同于 PDF 页序与重命名编号顺序。
+       四个分区共用这一批图片，此处仅表示「处理哪些图」，无流水线语义。 */
     files: [],
     seq: 1,
 
     /* 界面配置 */
     sortMode: 'natural',        // 'natural' | 'lex'
     sortOrder: 'asc',           // 'asc' | 'desc'
-    manualOrder: false,         // 是否手动拖过顺序（拖过就不再自动重排）
-    baseOrder: [],              // 自动排序下的 id 顺序，用于「还原排序」
+    manualOrder: false,         // 是否已手动调整顺序（调整后不再自动重排）
 
     /* 当前分区：'shell' | 'resize' | 'format' | 'pdf' */
     tab: 'shell',
 
-    /* 预览用的样本文件 */
+    /* 预览样本文件，供改分辨率分区计算示例目标尺寸。
+       由文件池维护：点选图片时指向该图，键盘移动时同步更新。 */
     sampleId: null,
 
     /* 运行状态 */
@@ -32,8 +32,8 @@ window.ITB = window.ITB || {};
 
     /* 常量 */
     limits: {
-      maxPreviewThumbs: 600,    // 缩略图最多给这么多张，避免上千张时卡
-      warnCount: 100            // 超过这个数量给软警告
+      maxPreviewThumbs: 600,    // 缩略图数量上限，避免大批量时渲染卡顿
+      warnCount: 100            // 超过该数量时给出软警告
     }
   };
 
@@ -51,7 +51,7 @@ window.ITB = window.ITB || {};
     return null;
   };
 
-  /* 预览样本：优先用用户点过的那张，否则用第一张选中的 */
+  /* 预览样本：优先取用户点选的图片，否则取第一张已选中的图片 */
   ITB.sampleFile = function () {
     var st = ITB.state;
     if (st.sampleId) {

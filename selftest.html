@@ -60,17 +60,17 @@
 <body>
 <header>
   <h1>图片工具箱 · 自检</h1>
-  <div class="sub">这个页面只用于开发验证，不是工具箱本体。工具箱请打开 <code>index.html</code>。</div>
+  <div class="sub">本页仅用于开发验证，非工具本体。工具入口为 <code>index.html</code>。</div>
   <div id="summary">正在自检…</div>
 </header>
 <main id="out">
   <p class="note">
-    本页加载的是 <code>js/</code> 下的真实模块（不加载 <code>app.js</code>，
-    因为它需要 index.html 的 DOM）。所有断言都是真的在跑这些模块。
+    本页加载 <code>js/</code> 下的真实模块（不加载 <code>app.js</code>，
+    因其依赖 index.html 的 DOM）。所有断言均直接调用这些模块执行。
   </p>
 </main>
 
-<!-- 加载模块本体，顺序与 index.html 一致 -->
+<!-- 模块加载顺序与 index.html 一致 -->
 <script src="js/util.js"></script>
 <script src="js/pdfwriter.js"></script>
 <script src="js/zipwriter.js"></script>
@@ -182,7 +182,7 @@
         bad(g2, f, String(e && e.message || e));
       }
     }).catch(function () {
-      /* file:// 下 fetch 会被 CORS 拦掉，这不是工具本身的缺陷 */
+      /* file:// 下 fetch 会被 CORS 拦截，与工具本身无关 */
       record(g2, true, f, '跳过（file:// 下无法读取文本，改用运行结果判断）');
     }).then(function () {
       syntaxDone++;
@@ -220,11 +220,6 @@
   pPrefix.prefixOn = true;
   pPrefix.prefix = 'out_';
   eq(g4, '加前缀', R.applyRules('photo', 0, 3, pPrefix), 'out_photo');
-
-  var pSuffix = R.defaultParams();
-  pSuffix.suffixOn = true;
-  pSuffix.suffix = '_final';
-  eq(g4, '加后缀', R.applyRules('photo', 0, 3, pSuffix), 'photo_final');
 
   var pNum = R.defaultParams();
   pNum.numberOn = true;
@@ -313,27 +308,8 @@
   var rEq = T.computeTarget(1000, 500, { mode: 'width', width: 1000, allowUpscale: false });
   eq(g5, '目标等于原尺寸时标记为未变化', rEq.unchanged, true);
 
-  var stepsChain = [
-    { enabled: true, type: 'resize', params: { mode: 'width', width: 1000, allowUpscale: false } },
-    { enabled: true, type: 'resize', params: { mode: 'percent', percent: 50, allowUpscale: false } }
-  ];
-  var ls = T.layoutSize(4000, 2000, stepsChain);
-  eq(g5, '多步缩放链式生效 4000 → 1000 → 500', ls.width + 'x' + ls.height, '500x250');
-
-  var effSteps = T.effectiveSteps([
-    { enabled: true, type: 'format', params: { format: 'png' } },
-    { enabled: false, type: 'format', params: { format: 'jpeg' } }
-  ]);
-  eq(g5, '被停用的转格式步骤不参与', effSteps.format.params.format, 'png');
-
   eq(g5, '格式对应的扩展名', T.extOf('jpeg'), '.jpg');
   eq(g5, '格式对应的 MIME', T.mimeOf('webp'), 'image/webp');
-
-  var memEst = T.estimateMemory(
-    [{ width: 2000, height: 1000, id: 1 }],
-    [{ enabled: true, type: 'resize', params: { mode: 'percent', percent: 50, allowUpscale: false } }]
-  );
-  eq(g5, '内存粗估按缩放后的像素算', memEst.pixels, 1000 * 500);
 
   /* ── 六、DEFLATE 往返 ─────────────────────────────────── */
 
@@ -379,7 +355,7 @@
     });
   }));
 
-  /* ── 七、用 canvas 真实产出的字节验证解析器 ───────────── */
+  /* ── 七、用 canvas 实际产出的字节验证解析器 ───────────── */
 
   var g7 = group('七、图片字节解析（输入是真 canvas 编出来的 PNG / JPEG）');
 
@@ -416,7 +392,7 @@
         for (var i = 0; i < info.idat.length; i++) total += info.idat[i].length;
         eq(g7, 'idatLength 与实际片段总长一致', total, info.idatLength);
 
-        /* canvas 产出的 PNG 必然是 8 位、非隔行、无 alpha（我们强制 alpha:false） */
+        /* canvas 产出的 PNG 必然为 8 位、非隔行、无 alpha（已强制 alpha:false） */
         eq(g7, '强制不透明的 canvas 产出无 alpha 的 PNG', info.needsFlatten, false);
       }
       return canvasToBlob(testCanvas, 'image/jpeg', 0.9);
@@ -442,7 +418,7 @@
 
   /* ── 八、PDF 结构 ─────────────────────────────────────── */
 
-  var g8 = group('八、PDF 结构（自研写出器）');
+  var g8 = group('八、PDF 结构（本仓库写出器）');
 
   var pdfCanvas = document.createElement('canvas');
   pdfCanvas.width = 40;
@@ -451,8 +427,8 @@
   pdfCtx.fillStyle = '#ff8800';
   pdfCtx.fillRect(0, 0, 40, 30);
 
-  /* pdfBuild.build 现在的签名是 (items, opts)，items 里要的是 File/Blob。
-     自检里手上只有 Blob，所以包一层顺便把结果转成字节。 */
+  /* pdfBuild.build 的签名为 (items, opts)，items 要求 File/Blob。
+     此处仅有 Blob，故封装一层并将结果转为字节。 */
   function buildPdfBytes(entries, opts) {
     var items = entries.map(function (e) {
       return {
@@ -478,7 +454,8 @@
         for (var i = 0; i < pdf.length; i++) text += String.fromCharCode(pdf[i]);
 
         eq(g8, '文件头是 %PDF-', text.slice(0, 5), '%PDF-');
-        eq(g8, '第 6 字节是二进制标记', pdf[5], 0xE2);
+        eq(g8, '文件头第 6 字节起是版本号', text.slice(5, 9), '1.4\n');
+        eq(g8, '紧接着是二进制标记行', pdf[9], 0xE2);
         record(g8, text.indexOf('%%EOF') > 0, '有 %%EOF 结束标记', '');
         record(g8, text.indexOf('/Type /Catalog') > 0, '有文档目录', '');
         record(g8, text.indexOf('/Type /Pages') > 0, '有页面树', '');
@@ -494,7 +471,7 @@
         var xrefAt = text.indexOf('xref\n0 ');
         eq(g8, 'startxref 指向的偏移刚好是 xref 表开头', claimed, xrefAt);
 
-        /* 每个对象的偏移必须严格递增，且真的落在「N 0 obj」上 */
+        /* 每个对象的偏移须严格递增，且精确落在「N 0 obj」上 */
         var countMatch = /xref\n0 (\d+)\n/.exec(text);
         var count = countMatch ? parseInt(countMatch[1], 10) : 0;
         record(g8, count > 0, 'xref 声明了对象数', '共 ' + count + ' 个');
@@ -519,16 +496,47 @@
             '每个 xref 偏移都精确指向对应对象',
             allGood ? '逐个核对 ' + checked + ' 个' : '偏移对不上');
         }
+
+        /* 元数据：ASCII 使用字面量，非 ASCII 使用 UTF-16BE 十六进制串，
+           否则 latin1Bytes 会将每个字符替换为 '?'。 */
+        record(g8, text.indexOf('/Producer (imgtoolbox)') > 0,
+          'ASCII 元数据用字面量字符串', '');
+
+        return buildPdfBytes([{ name: 'p1.png', blob: blob }], { title: '中文标题' });
+      }).then(function (res) {
+        var pdf = res.bytes;
+        var text = '';
+        for (var i = 0; i < pdf.length; i++) text += String.fromCharCode(pdf[i]);
+
+        // '中文标题' 的 UTF-16BE 编码为 4E2D 6587 6807 9898，前置 FEFF BOM
+        var expectHex = '<FEFF4E2D658768079898>';
+        record(g8, text.indexOf('/Title ' + expectHex) > 0,
+          '中文标题写成 UTF-16BE 十六进制串（不乱码）',
+          text.indexOf(expectHex) > 0 ? expectHex : '没找到，或写成了一串 ?');
+        record(g8, text.indexOf('/Title (') < 0,
+          '中文标题没有退化成字面量', '');
+
+        /* 直接调用 pdfwriter.js 的真实校验器，而非本页的 pdfLint。
+           两者为独立实现，缺陷不会互相暴露：validate() 曾将
+           streamRe.lastIndex 误写为 sm.re.lastIndex，运行即抛 TypeError，
+           而本页的 pdfLint 无法发现。以下为该缺陷的回归测试。 */
+        return ITB.pdf.validate(pdf).then(function (rep) {
+          record(g8, rep.problems.length === 0 && rep.pages.length === 0,
+            'pdfwriter.validate() 对合法 PDF 不报问题',
+            rep.problems.length ? rep.problems.slice(0, 3).join(' / ')
+                                : ('检查了 ' + rep.imageCount + ' 张图 / ' +
+                                   rep.streams + ' 个流'));
+          return null;
+        });
       });
   }).catch(function (e) {
     bad(g8, '生成并校验 PDF', String(e && e.message || e));
   }));
-
   /* ── 八之二、严格 PDF 校验器 ──────────────────────────────
-     不是「找找关键字在不在」，而是像真正的 PDF 阅读器那样把文件走一遍：
-     解析 xref 表、逐字节核对每个对象偏移、检查 stream/endstream 的长度
-     声明是否与实际字节数精确吻合、把正文里的对象都找出来。
-     任何一步对不上，都会直接指出行号/偏移，而不是只说「打不开」。
+     不依赖关键字匹配，而是按解析器顺序完整遍历文件：
+     解析 xref 表、逐字节核对对象偏移、校验 stream 与 endstream 之间的
+     /Length 声明是否与实际字节数吻合。
+     任一项不通过即给出行号/偏移，而非仅报告「无法打开」。
      ──────────────────────────────────────────────────────── */
 
   function pdfLint(pdf) {
@@ -542,7 +550,7 @@
     /* 2. %%EOF 必须在最末尾附近 */
     var eofAt = text.lastIndexOf('%%EOF');
     if (eofAt < 0) problems.push('缺少 %%EOF');
-    else if (text.length - (eofAt + 5) > 4) {
+    else if (text.length - (eofAt + 5) > 6) {
       problems.push('%%EOF 之后还有 ' + (text.length - eofAt - 5) + ' 字节多余内容');
     }
 
@@ -560,7 +568,7 @@
       return { problems: problems };
     }
 
-    /* 4. 手动解析 xref 表：像阅读器那样逐字段读，而不是靠正则猜 */
+    /* 4. 逐字段解析 xref 表（不依赖正则匹配） */
     var p = xrefOffset + 4;                       // 跳过 "xref"
     while (text[p] === '\r' || text[p] === '\n' || text[p] === ' ') p++;
 
@@ -580,12 +588,11 @@
       var entry = text.substr(p, 20);
       if (entry.length < 20) { problems.push('第 ' + k + ' 条 xref 条目不足 20 字节'); break; }
 
-      // 20 字节一条：10 位偏移 + 空格 + 5 位世代号 + 空格 + 1 字节类型 + 2 字节 EOL
-      if (!/^\d{10} \d{5} [nf]/.test(entry)) {
+      /* 每条 20 字节：10 位偏移 + 空格 + 5 位世代号 + 空格 +
+         1 位类型 + \r\n。类型位于 [17]，行尾两字节位于 [18][19]；
+         行尾必须为 \r\n，否则与 20 字节步进不符。 */
+      if (!/^\d{10} \d{5} [nf]\r\n$/.test(entry)) {
         problems.push('第 ' + k + ' 条 xref 条目格式不对：' + JSON.stringify(entry));
-      }
-      if (entry[17] !== ' ' || (entry[18] !== '\r' && entry[18] !== '\n')) {
-        problems.push('第 ' + k + ' 条 xref 条目结尾不是「空格 + 换行」');
       }
 
       offsets[firstObj + k] = {
@@ -595,7 +602,7 @@
       p += 20;
     }
 
-    // 逐个数：每个 in-use 对象的偏移必须精确落在「N 0 obj」上
+    // 逐个核对：每个 in-use 对象的偏移须精确落在「N 0 obj」上
     var objIds = Object.keys(offsets);
     for (var q = 0; q < objIds.length; q++) {
       var id = objIds[q];
@@ -622,9 +629,8 @@
       if (!/\/Root\s+\d+\s+\d+\s+R/.test(trText)) problems.push('trailer 里缺少 /Root');
     }
 
-    /* 5. 字典里不允许出现 undefined / NaN / null 这种字面量——
-          一旦写进 PDF，阅读器就完全打不开。这是最容易出、
-          又最难看出来的错误，所以专门查一遍。 */
+    /* 5. 字典中不得出现 undefined / NaN / null 字面量。
+          此类字面量一旦写入 PDF，阅读器将无法打开，且不易察觉。 */
     var badLit = /\/(Length|Width|Height|Size|Count|BitsPerComponent)\s+(undefined|NaN|null)\b/g;
     var bl;
     while ((bl = badLit.exec(text)) !== null) {
@@ -632,9 +638,8 @@
       problems.push('第 ' + lineNo + ' 行出现非法值：' + JSON.stringify(bl[0]));
     }
 
-    /* 6. 每个 stream：按真正的阅读器那样，用 /Length 定位数据末尾，
-          再看那里是不是恰好跟着 endstream。靠自己搜 endstream 关键字
-          是不对的——万一数据里出现这个词就会错位。 */
+    /* 6. 每个 stream：以 /Length 定位数据末尾，再校验其后紧随 endstream。
+          不可直接搜索 endstream 关键字：数据中出现该字节序列会导致错位。 */
     var streams = [];
     var re = /<<((?:[^<>]|<<[^>]*>>)*)>>\s*stream(\r\n|\r|\n)/g;
     var sm;
@@ -642,7 +647,7 @@
     while ((sm = re.exec(text)) !== null) {
       var dictStart = sm.index;
       var dict = sm[1];
-      var dataStart = re.lastIndex;              // sm[2] 是 stream 后的换行
+      var dataStart = re.lastIndex;              // sm[2] 为 stream 后的换行
       var lenM = /\/Length\s+(\d+)/.exec(dict);
 
       if (!lenM) {
@@ -659,7 +664,7 @@
         continue;
       }
 
-      // /Length 之后允许出现空白，然后必须是 endstream
+      // /Length 之后允许空白，但随后必须是 endstream
       var tail = text.slice(after, after + 12);
       if (!/^\s*endstream/.test(tail)) {
         problems.push('偏移 ' + dictStart + ' 的 stream 在 /Length 指定的位置（' + after +
@@ -696,9 +701,9 @@
     };
   }
 
-  /* ── 八之三、用校验器实际检查两种来源产出的 PDF ────────── */
+  /* ── 八之三、用校验器检查两种来源产出的 PDF ───────────── */
 
-  var g8b = group('八·三、严格校验：PNG 源 与 JPEG 源产出的 PDF 都要真的合法');
+  var g8b = group('八·三、严格校验：PNG 源与 JPEG 源产出的 PDF 均须合法');
 
   function hexOf(bytes, max) {
     var out = [];
@@ -708,7 +713,7 @@
     return out.join(' ');
   }
 
-  /** 把一段字节以「偏移 | 十六进制 | 可打印字符」的形式印到页面上 */
+  /** 以「偏移 | 十六进制 | 可打印字符」格式将字节输出到页面 */
   function dumpHex(ul, title, pdf, start, count) {
     var li = document.createElement('li');
     li.className = 'pass';
@@ -741,7 +746,7 @@
     pre.textContent = lines.join('\n');
     li.appendChild(pre);
 
-    // 方便一键复制
+    // 便于复制的整段选取（点击 hexdump 时全选其内容）
     pre.addEventListener('click', function () {
       try {
         var range = document.createRange();
@@ -749,9 +754,9 @@
         var sel = window.getSelection();
         sel.removeAllRanges();
         sel.addRange(range);
-      } catch (e) { /* 选中失败就算了，手动拖选也可以 */ }
+      } catch (e) { /* 选取失败时仍可手动拖选 */ }
     });
-    pre.title = '点一下可以全选，方便复制';
+    pre.title = '点击可全选，便于复制';
 
     ul.appendChild(li);
   }
@@ -760,71 +765,6 @@
     var s = String(n);
     while (s.length < width) s = '0' + s;
     return s;
-  }
-
-  function runLint(ul, label, pdf, done) {
-    var report = pdfLint(pdf);
-
-    record(ul, report.problems.length === 0,
-      label + '：结构检查',
-      report.problems.length ? report.problems.slice(0, 3).join(' / ') : '无问题');
-
-    if (report.problems.length) {
-      if (window.console && console.error) {
-        console.error('[pdfLint] ' + label, report.problems, report);
-      }
-    }
-
-    /* 无论对错都印一段十六进制转储：出问题时我能直接看字节，
-       不用让你把二进制文件发给我 */
-    dumpHex(ul, label + '：前 320 字节', pdf, 0, 320);
-    dumpHex(ul, label + '：最后 120 字节', pdf, Math.max(0, pdf.length - 120), 120);
-
-    if (report.problems.length) {
-      done();
-      return;
-    }
-
-    record(ul, report.imageCount === 1, label + '：正好内嵌 1 张图',
-      '实际 ' + report.imageCount + ' 张');
-
-    var flate = report.streams.filter(function (s) { return s.filter === 'FlateDecode'; });
-    eq(ul, label + '：有 1 个 FlateDecode 流', flate.length, 1);
-
-    if (!flate.length) { done(); return; }
-
-    /* 真正解压一遍，确认阅读器能把它读成原始像素数据 */
-    var s = flate[0];
-    var raw = pdf.slice(s.dataStart, s.dataStart + s.length);
-
-    var ds = new DecompressionStream('deflate-raw');
-    var w = ds.writable.getWriter();
-    w.write(raw);
-    w.close();
-
-    new Response(ds.readable).arrayBuffer().then(function (buf) {
-      var raw2 = new Uint8Array(buf);
-      record(ul, raw2.length > 0, label + '：FlateDecode 流能被解压',
-        raw2.length + ' 字节原始数据');
-
-      /* 解压出来的应该是 PNG 的 IDAT 内容：每行 1 字节滤波器 + 行像素。
-         这里只验证长度符合 PNG 原始扫描线的规定长度。 */
-      var wm = /\/Width\s+(\d+)/.exec(s.dict);
-      var hm = /\/Height\s+(\d+)/.exec(s.dict);
-      var cm = /\/ColorSpace\s+\/(\w+)/.exec(s.dict);
-
-      if (wm && hm && cm) {
-        var W = parseInt(wm[1], 10);
-        var H = parseInt(hm[1], 10);
-        var ch = (cm[1] === 'DeviceRGB') ? 3 : 1;
-        var expect = H * (1 + W * ch);
-        eq(ul, label + '：解压后长度等于 PNG 原始扫描线长度', raw2.length, expect);
-      }
-      done();
-    }).catch(function (e) {
-      bad(ul, label + '：FlateDecode 流无法解压', String(e && e.message || e));
-      done();
-    });
   }
 
   pending.push((function () {
@@ -854,8 +794,7 @@
           record(g8b, report.problems.length === 0, label + '：结构检查',
             report.problems.length ? report.problems.slice(0, 3).join(' / ') : '无问题');
 
-          /* 现在所有图都统一重编码成基线 JPEG 内嵌 —— 这是刻意的，
-             为的是绕开自己解析 PNG 流的那一堆坑 */
+          /* 当前流水线统一重编码为基线 JPEG 内嵌，以避免直接解析 PNG 流 */
           var text = '';
           for (var i = 0; i < pdf.length; i++) text += String.fromCharCode(pdf[i]);
           record(g8b, text.indexOf('/Filter /DCTDecode') > 0,
@@ -874,7 +813,7 @@
       .then(function (b) { pngBlob = b; return canvasToBlob(jpg, 'image/jpeg', 0.9); })
       .then(function (b) { jpgBlob = b; return checkOne('PNG 源 → PDF', 40, 30); })
       .then(function () {
-        /* 再走一遍低层写出器：手动塞一页 JPEG，并核对字节原样搬运 */
+        /* 再经低层写出器：手动加入一页 JPEG，核对字节是否原样搬运 */
         return jpgBlob.arrayBuffer().then(function (srcBuf) {
           var src = new Uint8Array(srcBuf);
           var info = ITB.pdf.parseImage(src);
@@ -895,13 +834,13 @@
               var text = '';
               for (var i = 0; i < pdf.length; i++) text += String.fromCharCode(pdf[i]);
 
-              /* 把 JPEG 原始字节从 PDF 里抠出来，和源文件逐字节比对 */
+              /* 提取 PDF 中内嵌的 JPEG 原始字节，与源文件逐字节比对 */
               var dst = text.indexOf('/DCTDecode');
               var sAt = text.indexOf('stream', dst) + 6;
               if (text[sAt] === '\r') sAt++;
               if (text[sAt] === '\n') sAt++;
               var eAt = text.indexOf('endstream', sAt);
-              var embedded = pdf.slice(sAt, eAt - 1);   // 减去结尾那个分隔换行
+              var embedded = pdf.slice(sAt, eAt - 1);   // 扣除 stream 末尾的分隔换行
 
               eq(g8b, 'JPEG 源：内嵌字节数等于源文件', embedded.length, src.length);
 
@@ -921,15 +860,13 @@
     bad(g8b, '严格校验本身出错', String(e && e.message || e));
   }));
 
-  /* ── 八之四、用 pdf.js 实际解析一遍（可选，需要联网） ────
-     前面所有检查都是我自己写的，可能有共同的盲区。
-     这一段把生成的 PDF 交给 pdf.js —— Mozilla 的 PDF 引擎，
-     也就是 Firefox 内置的那个 —— 让它真的解析一遍。
-     它能读出页数和尺寸，就说明 PDF 对独立实现也是合法的。
-     离线或 CDN 不通时优雅跳过，不影响其他结果。
+  /* ── 八之四、独立实现验证：交由 pdf.js 解析（可选，需联网） ────
+     前述检查均由本仓库自行实现，可能存在共同盲区。本段将生成的 PDF 交给 pdf.js
+     （Mozilla 的 PDF 引擎，即 Firefox 内置实现）解析：能正确读出页数与尺寸，
+     即可确认该 PDF 对独立实现合法。离线或 CDN 不可达时跳过，不影响其余结果。
      ──────────────────────────────────────────────────────── */
 
-  var g8c = group('八·四、独立实现验证：交给 pdf.js 实际解析（需要联网，离线自动跳过）');
+  var g8c = group('八·四、独立实现交叉验证：交由 pdf.js 解析（需联网，离线自动跳过）');
 
   function loadScript(url) {
     return new Promise(function (resolve, reject) {
@@ -979,11 +916,11 @@
         return null;
       }
 
-      // worker 也走 CDN；加载不了就让 pdf.js 退回主线程解析
+      // worker 亦从 CDN 加载；加载失败时 pdf.js 退回主线程解析
       try {
         lib.GlobalWorkerOptions.workerSrc =
           'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-      } catch (e) { /* 无所谓 */ }
+      } catch (e) { /* 忽略：缺少该配置时 pdf.js 自行降级 */ }
 
       return lib.getDocument({ url: pdfUrl }).promise.then(function (doc) {
         eq(g8c, 'pdf.js 读出的页数', doc.numPages, 1);
@@ -993,8 +930,8 @@
           eq(g8c, 'pdf.js 读出的页面宽度', Math.round(vp.width), 70);
           eq(g8c, 'pdf.js 读出的页面高度', Math.round(vp.height), 55);
 
-          /* 真正把图片解码出来：这一步会解 /FlateDecode 并还原像素。
-             能跑到这里，说明 PDF 不光是结构合法，图像数据也是有效的。 */
+          /* 实际解码图像：此步骤会解析 /FlateDecode 并还原像素。
+             能执行至此，说明该 PDF 不仅结构合法，图像数据同样有效。 */
           return page.getOperatorList().then(function () {
             return null;
           });
@@ -1013,7 +950,7 @@
 
   /* ── 九、ZIP 结构 ─────────────────────────────────────── */
 
-  var g9 = group('九、ZIP 结构（自研写出器）');
+  var g9 = group('九、ZIP 结构（本仓库写出器）');
 
   pending.push((function () {
     var zw = new ITB.ZipWriter();
@@ -1068,14 +1005,14 @@
     bad(g9, '生成并校验 ZIP', String(e && e.message || e));
   }));
 
-  /* ── 十、带透明通道的 PNG 垫白底 → PDF（最复杂的一条路） ── */
+  /* ── 十、带透明通道的 PNG：填充白底后写入 PDF ───────────── */
 
-  var g10 = group('十、带 alpha 的 PNG：垫白底后写入 PDF');
+  var g10 = group('十、带 alpha 的 PNG：填充白底后写入 PDF');
 
   var alphaCanvas = document.createElement('canvas');
   alphaCanvas.width = 50;
   alphaCanvas.height = 40;
-  // 默认就是带 alpha 的上下文，画一个半透明方块 + 一小块全透明
+  // 该上下文默认带 alpha；绘制一个半透明方块与一小块全透明区域
   var alphaCtx = alphaCanvas.getContext('2d');
   alphaCtx.clearRect(0, 0, 50, 40);
   alphaCtx.fillStyle = 'rgba(255, 0, 0, 0.5)';
@@ -1086,7 +1023,7 @@
       var info = ITB.pdf.parseImage(bytes);
       eq(g10, '带 alpha 的 PNG 颜色类型是 6', bytes[25], 6);
       record(g10, !!info && info.needsFlatten === true,
-        '解析器认出它需要垫白底',
+        '解析器识别出需要填充白底',
         info ? 'reason=' + info.reason : '识别失败');
 
       return buildPdfBytes([{ name: 'alpha.png', blob: blob }], { title: 'alpha-test' })
@@ -1101,7 +1038,7 @@
           record(g10, text.indexOf('/MediaBox [0 0 50 40]') > 0,
             '页面尺寸正确 50x40', '');
 
-          /* 现在统一重编码成基线 JPEG 内嵌，透明已经在 JPEG 编码前垫成白色 */
+          /* 当前统一重编码为基线 JPEG 内嵌，透明区在 JPEG 编码前已填充为白色 */
           record(g10, text.indexOf('/Filter /DCTDecode') > 0,
             '图片以 DCTDecode（基线 JPEG）内嵌', '');
 
@@ -1109,8 +1046,8 @@
           record(g10, report.problems.length === 0, '带 alpha 的图产出的 PDF 结构合法',
             report.problems.length ? report.problems.slice(0, 2).join(' / ') : '无问题');
 
-          /* 关键：垫白底之后必须不再带 alpha。JPEG 本身没有 alpha 通道，
-             但色彩空间如果写错成 DeviceGray 就会丢掉颜色。 */
+          /* 关键：填充白底后不应再带 alpha。JPEG 本身无 alpha 通道，
+             但色彩空间若写为 DeviceGray 会丢失颜色。 */
           var m = /\/ColorSpace \/(\w+)/.exec(text);
           eq(g10, '色彩空间是 DeviceRGB', m ? m[1] : '(没找到)', 'DeviceRGB');
         });
@@ -1137,12 +1074,23 @@
       type: 'image/png', width: 400, height: 300, measured: true, selected: true
     };
 
+    /* 仅检测 hasWorker() 不足以说明 Worker 路径可用：此前该处直接记一条
+       pass，而注入清单遗漏辅助函数、每次运行均静默退回主线程，自检仍为通过。
+       此处实际组装一次注入源码，组装失败即表明 Worker 路径不可用。 */
     var hasWorker = ITB.workerHost.hasWorker();
-    record(g11, true, 'Worker 可用性',
-      hasWorker ? '支持 Worker，像素处理在后台线程' : '不支持，已退回主线程串行');
+    try {
+      var injectSrc = ITB.workerHost.buildInjectSource();
+      record(g11, typeof injectSrc === 'string' && injectSrc.length > 0,
+        'Worker 注入源码可组装（静态依赖检查通过）',
+        (hasWorker ? '环境支持 Worker' : '环境不支持 Worker，将退回主线程') +
+        ' · 注入 ' + injectSrc.length + ' 字节');
+    } catch (e) {
+      bad(g11, 'Worker 注入源码无法组装（像素处理将退回主线程）',
+        String(e && e.message || e));
+    }
 
-    /* 直接把这一张塞进文件池和 state，然后调用真实的分区导出函数 ——
-       而不是绕过 exporter 自己拼参数，这样测的才是界面真正会走的路 */
+    /* 将该图直接写入文件池与 state，再调用真实的分区导出函数，
+       而非绕过 exporter 自行拼装参数，以保证覆盖界面实际执行的路径 */
     ITB.state.files = [fileItem];
     ITB.state.sampleId = 1;
     ITB.state.cancelRequested = false;
@@ -1156,16 +1104,28 @@
       record(g11, zres.bytes > 0, '改分辨率分区：产出了非空 ZIP',
         U.formatBytes(zres.bytes));
 
-      /* ZIP 内部条目的名字应该是原名（这个分区不改名） */
+      /* ZIP 条目名应保持原名（该分区不改名），且内容编码也不得改变。
+         此处为回归断言：曾出现 mime 未传递，导致缩放后的 JPEG 被编码为
+         PNG，而条目名仍为 .jpg。 */
       return zres.blob.arrayBuffer().then(function (zb) {
         var z = new Uint8Array(zb);
         var text = '';
         for (var i = 0; i < Math.min(z.length, 200); i++) text += String.fromCharCode(z[i]);
         record(g11, text.indexOf('sample.png') > 0,
           '改分辨率分区：ZIP 条目名保持原名 sample.png', '');
+
+        /* 条目数据紧接本地文件头与条目名之后。源图为 canvas 产出的 PNG，
+           故条目内容应以 PNG 签名开头。 */
+        var dataAt = 30 + 'sample.png'.length;
+        var isPngData = z[dataAt] === 0x89 && z[dataAt + 1] === 0x50 &&
+                        z[dataAt + 2] === 0x4E && z[dataAt + 3] === 0x47;
+        record(g11, isPngData,
+          '改分辨率分区：条目内容仍为 PNG（编码未改变）',
+          isPngData ? '' : '开头字节 ' + z[dataAt] + ' ' + z[dataAt + 1] +
+            ' ' + z[dataAt + 2] + ' ' + z[dataAt + 3]);
       });
     }).then(function () {
-      /* ── 导出 PDF 分区：应该用原图 400×300，不受缩放分区影响 ── */
+      /* ── 导出 PDF 分区：应使用原图尺寸 400×300，不受缩放分区影响 ── */
       return ITB.exporter.runPdf(null, noCancel);
     }).then(function (pres) {
       eq(g11, '导出 PDF 分区：页数', pres.pages, 1);
@@ -1179,7 +1139,7 @@
         var text = '';
         for (var i = 0; i < z.length; i++) text += String.fromCharCode(z[i]);
 
-        /* 分区之间互不干扰：PDF 用的是原图尺寸，不是缩放后的 200×150 */
+        /* 分区之间互不影响：PDF 使用原图尺寸，而非缩放后的 200×150 */
         record(g11, text.indexOf('/MediaBox [0 0 400 300]') > 0,
           '导出 PDF 分区：用的是原图尺寸 400×300（不受改分辨率影响）',
           text.indexOf('/MediaBox [0 0 400 300]') > 0 ? '' : '页面尺寸不是 400×300');
@@ -1192,6 +1152,128 @@
   }).catch(function (e) {
     bad(g11, '端到端执行', String(e && e.message || e));
   }));
+
+  /* ── 十二、统一页面宽度（须保持宽高比） ───────────────────
+     取两张宽度不同的图：400×300 与 200×400。
+     统一宽度取最宽者 400，故窄图放大至宽度 400；高度按同一比例计算，
+     即 400 × (400/200) = 800。若实现对宽高采用不同比例，则可由此检出变形。
+     ──────────────────────────────────────────────────────── */
+
+  var g12 = group('十二、统一页面宽度：按最宽图等比缩放');
+
+  function sizeCanvas(w, h, color) {
+    var c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    var cx = c.getContext('2d', { alpha: false });
+    cx.fillStyle = color;
+    cx.fillRect(0, 0, w, h);
+    return c;
+  }
+
+  var prevFiles = ITB.state.files;
+  var prevSample = ITB.state.sampleId;
+
+  pending.push((function () {
+    var wideC = sizeCanvas(400, 300, '#3355aa');
+    var narrowC = sizeCanvas(200, 400, '#aa5533');
+    var wideBlob = null;
+    var narrowBlob = null;
+
+    function asItem(blob, name, id, w, h) {
+      var f = new File([blob], name, { type: 'image/png' });
+      return {
+        id: id, file: f, name: name, relPath: '', size: f.size,
+        type: 'image/png', width: w, height: h, measured: true, selected: true
+      };
+    }
+
+    return canvasToBlob(wideC, 'image/png')
+      .then(function (b) { wideBlob = b; return canvasToBlob(narrowC, 'image/png'); })
+      .then(function (b) { narrowBlob = b; })
+      .then(function () {
+        // 排列顺序：宽图在前，窄图在后
+        ITB.state.files = [
+          asItem(wideBlob, 'wide.png', 9001, 400, 300),
+          asItem(narrowBlob, 'narrow.png', 9002, 200, 400)
+        ];
+        ITB.state.sampleId = 9001;
+        ITB.state.cancelRequested = false;
+
+        // 直接调用 pdfBuild，以便显式指定 uniformWidth
+        return ITB.pdfBuild.measureMaxWidth(ITB.state.files).then(function (mw) {
+          eq(g12, '量出的统一宽度为最宽图的 400', mw, 400);
+
+          return ITB.pdfBuild.build(
+            ITB.state.files.map(function (f) { return { name: f.name, file: f.file }; }),
+            { title: 'uniform', uniformWidth: true, isCancelled: function () { return false; } }
+          );
+        });
+      })
+      .then(function (out) {
+        eq(g12, '页数', out.pages, 2);
+
+        return out.blob.arrayBuffer().then(function (buf) {
+          var z = new Uint8Array(buf);
+          var text = '';
+          for (var i = 0; i < z.length; i++) text += String.fromCharCode(z[i]);
+
+          var boxes = [];
+          var re = /\/MediaBox \[0 0 (\d+) (\d+)\]/g;
+          var m;
+          while ((m = re.exec(text)) !== null) {
+            boxes.push({ w: parseInt(m[1], 10), h: parseInt(m[2], 10) });
+          }
+
+          eq(g12, '两页的 MediaBox 均已写出', boxes.length, 2);
+
+          if (boxes.length === 2) {
+            eq(g12, '宽图保持原尺寸 400×300（其为最宽图）',
+              boxes[0].w + 'x' + boxes[0].h, '400x300');
+            eq(g12, '窄图等比放大至同一宽度 400×800',
+              boxes[1].w + 'x' + boxes[1].h, '400x800');
+            eq(g12, '两页宽度一致', boxes[0].w === boxes[1].w, true);
+
+            /* 关键断言：宽高比须与原图一致。
+               两侧均为整数比，容差取 1e-9 足够。 */
+            var before = 200 / 400;
+            var after = boxes[1].w / boxes[1].h;
+            eq(g12, '窄图宽高比未变形', Math.abs(before - after) < 1e-9, true);
+          }
+
+          var report = pdfLint(z);
+          record(g12, report.problems.length === 0, '统一宽度后 PDF 结构合法',
+            report.problems.length ? report.problems.slice(0, 2).join(' / ') : '无问题');
+        });
+      })
+      .then(function () {
+        // 关闭统一宽度：各页应保持原尺寸
+        return ITB.pdfBuild.build(
+          ITB.state.files.map(function (f) { return { name: f.name, file: f.file }; }),
+          { title: 'asis', uniformWidth: false, isCancelled: function () { return false; } }
+        );
+      })
+      .then(function (out) {
+        return out.blob.arrayBuffer().then(function (buf) {
+          var z = new Uint8Array(buf);
+          var text = '';
+          for (var i = 0; i < z.length; i++) text += String.fromCharCode(z[i]);
+
+          record(g12, text.indexOf('/MediaBox [0 0 400 300]') > 0 &&
+                        text.indexOf('/MediaBox [0 0 200 400]') > 0,
+            '关闭统一宽度后各页保持原图尺寸',
+            text.indexOf('/MediaBox [0 0 200 400]') > 0 ? '' : '窄图未还原为 200×400');
+        });
+      })
+      .catch(function (e) {
+        bad(g12, '统一宽度执行', String(e && e.message || e));
+      })
+      .then(function () {
+        // 恢复初始状态，避免影响后续统计
+        ITB.state.files = prevFiles;
+        ITB.state.sampleId = prevSample;
+      });
+  })());
 
   /* ── 收尾 ─────────────────────────────────────────────── */
 

@@ -1,7 +1,7 @@
 /* ============================================================
    util.js —— 通用工具，无依赖
-   挂在 window.ITB 上。所有模块都用经典 <script> 加载，
-   因为 file:// 协议下 ES module 会被 CORS 拦掉、双击打不开。
+   挂载于 window.ITB。所有模块经经典 <script> 加载：
+   file:// 协议下 ES module 会被 CORS 拦截，导致双击无法打开。
    ============================================================ */
 
 window.ITB = window.ITB || {};
@@ -10,8 +10,8 @@ window.ITB = window.ITB || {};
   'use strict';
 
   /* ── 数字感知排序 ─────────────────────────────────────────
-     直接沿用原 png2pdf 的 natural_key：把夹在文字里的数字拆出来
-     当整数比，于是 'img2' 排在 'img10' 前面，而不是 'img1' 之后。
+     沿用 png2pdf 的 natural_key：将文本中的数字段拆出并按整数比较，
+     因此 'img2' 排在 'img10' 之前，而非 'img1' 之后。
      ──────────────────────────────────────────────────────── */
 
   function naturalKey(name) {
@@ -25,7 +25,7 @@ window.ITB = window.ITB || {};
     return key;
   }
 
-  // 混合类型的数组排序（number 和 string 不能直接比，要分类型）
+  // 混合类型数组的比较（number 与 string 不可直接比较，需按类型分支）
   function compareKeys(a, b) {
     var n = Math.min(a.length, b.length);
     for (var i = 0; i < n; i++) {
@@ -35,7 +35,7 @@ window.ITB = window.ITB || {};
         if (x < y) return -1;
         if (x > y) return 1;
       } else {
-        // 数字排在文字前面，符合资源管理器的直觉
+        // 数字段排在文本段之前，与文件管理器一致
         return tx === 'number' ? -1 : 1;
       }
     }
@@ -53,7 +53,7 @@ window.ITB = window.ITB || {};
   function splitExt(name) {
     var s = String(name);
     var i = s.lastIndexOf('.');
-    // 开头的点是隐藏文件标记，不算扩展名；'.gitignore' 之类整体当主名
+    // 首字符的点为隐藏文件标记，不计入扩展名；'.gitignore' 整体视为主名
     if (i <= 0) return { base: s, ext: '' };
     return { base: s.slice(0, i), ext: s.slice(i).toLowerCase() };
   }
@@ -65,7 +65,7 @@ window.ITB = window.ITB || {};
 
   /* ── 字节 / 字符串 ──────────────────────────────────────── */
 
-  // UTF-8 编码（ZIP 的条目名、PDF 的十六进制字符串都要用）
+  // UTF-8 编码（用于 ZIP 条目名与 PDF 十六进制字符串）
   function utf8Bytes(str) {
     if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(str);
     var out = [];
@@ -78,8 +78,8 @@ window.ITB = window.ITB || {};
     return new Uint8Array(out);
   }
 
-  // 把任意字符串按 Latin-1 / PDFDocEncoding 安全降级成字节：
-  // 非 ASCII 一律换成 '?'，避免写出非法字节把 PDF 弄坏。
+  // 将任意字符串按 Latin-1 / PDFDocEncoding 安全转换为字节：
+  // 非 ASCII 字符替换为 '?'，避免产生非法字节导致 PDF 损坏。
   function latin1Bytes(str) {
     var out = new Uint8Array(str.length);
     for (var i = 0; i < str.length; i++) {
@@ -94,23 +94,6 @@ window.ITB = window.ITB || {};
     var e = end === undefined ? bytes.length : end;
     for (var i = start || 0; i < e; i++) s += String.fromCharCode(bytes[i]);
     return s;
-  }
-
-  /* ── Blob 拼接 ──────────────────────────────────────────── */
-
-  // 把一堆 Uint8Array / Blob 顺序拼成一个 Blob，避免大文件在内存里翻倍
-  function concatBlob(parts, mime) {
-    var list = [];
-    for (var i = 0; i < parts.length; i++) {
-      var p = parts[i];
-      if (!p) continue;
-      if (p instanceof Uint8Array || p instanceof ArrayBuffer) {
-        list.push(new Blob([p]));
-      } else {
-        list.push(p);
-      }
-    }
-    return new Blob(list, { type: mime || 'application/octet-stream' });
   }
 
   /* ── 字节格式化 ─────────────────────────────────────────── */
@@ -131,13 +114,6 @@ window.ITB = window.ITB || {};
     return (n < 0 ? '-' : '') + s;
   }
 
-  function timestamp() {
-    var d = new Date();
-    return d.getFullYear() +
-      pad(d.getMonth() + 1, 2) + pad(d.getDate(), 2) + '_' +
-      pad(d.getHours(), 2) + pad(d.getMinutes(), 2) + pad(d.getSeconds(), 2);
-  }
-
   function dateStamp() {
     var d = new Date();
     return d.getFullYear() + pad(d.getMonth() + 1, 2) + pad(d.getDate(), 2);
@@ -155,7 +131,7 @@ window.ITB = window.ITB || {};
     if (opts.attrs) {
       for (var k in opts.attrs) {
         var v = opts.attrs[k];
-        // 跳过 undefined / null：否则会写出 min="undefined" 这种脏属性
+        // 跳过 undefined / null，避免写出 min="undefined" 之类的无效属性
         if (v === undefined || v === null || v === false) continue;
         node.setAttribute(k, v);
       }
@@ -191,11 +167,11 @@ window.ITB = window.ITB || {};
 
   function loadImageBitmap(file) {
     if (typeof createImageBitmap === 'function') {
-      // imageOrientation:'from-image' 让带 EXIF 旋转的照片按正确方向显示
+      // imageOrientation:'from-image'：按 EXIF 方向标记校正照片方向
       return createImageBitmap(file, { imageOrientation: 'from-image' })
         .catch(function () { return createImageBitmap(file); });
     }
-    // 兜底：老浏览器走 <img> + objectURL
+    // 兜底路径：不支持 createImageBitmap 时使用 <img> + objectURL
     return new Promise(function (resolve, reject) {
       var url = URL.createObjectURL(file);
       var img = new Image();
@@ -233,10 +209,8 @@ window.ITB = window.ITB || {};
     utf8Bytes: utf8Bytes,
     latin1Bytes: latin1Bytes,
     bytesToAscii: bytesToAscii,
-    concatBlob: concatBlob,
     formatBytes: formatBytes,
     pad: pad,
-    timestamp: timestamp,
     dateStamp: dateStamp,
     $: $,
     el: el,

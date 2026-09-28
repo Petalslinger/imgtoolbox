@@ -1,8 +1,7 @@
 /* ============================================================
    app.js —— 界面装配
 
-   分四个互不干扰的分区，共用左栏一个文件池（那只是「处理哪些图」，
-   不是流水线）。切换分区不丢设置，分区之间也互不影响。
+   四个相互独立的分区共用左侧文件池；切换分区不丢失设置，分区之间互不影响。
    ============================================================ */
 
 window.ITB = window.ITB || {};
@@ -104,7 +103,7 @@ window.ITB = window.ITB || {};
 
     ui.tabHint.textContent = TAB_HINTS[id] || '';
 
-    // 切过去时重算一遍这个分区的预览
+    // 切换后重算该分区的预览
     ITB.sections.refresh(id);
     ITB.pool.render();
     hideResult();
@@ -138,7 +137,7 @@ window.ITB = window.ITB || {};
       var list = this.files;
 
       if (!recursive) {
-        // 只留最外层：webkitRelativePath 里只有一个斜杠的就是顶层文件
+        // 仅保留顶层：webkitRelativePath 中只含一个斜杠的即为顶层文件
         list = Array.prototype.filter.call(list, function (f) {
           var rel = f.webkitRelativePath || '';
           return rel.indexOf('/') === rel.lastIndexOf('/');
@@ -215,7 +214,7 @@ window.ITB = window.ITB || {};
       return;
     }
 
-    // 重命名分区：有重名就直接拦住
+    // 重命名分区：存在重名时直接拦截
     if (id === 'shell') {
       var plan = ITB.sections.get('shell').plan();
       var dup = ITB.rename.findDuplicates(plan.map(function (p) { return p.finalName; }));
@@ -225,14 +224,12 @@ window.ITB = window.ITB || {};
       }
     }
 
-    // 数量大时提醒一句
+    // 数量较大时提示确认
     if (selected.length > st.limits.warnCount) {
-      var mem = U.formatBytes(ITB.transform.estimateMemory(selected, []));
       if (!window.confirm('这次要处理 ' + selected.length + ' 张图片。\n\n' +
-          '浏览器内存吃紧时可能变慢甚至失败，建议分批。\n\n仍然继续？')) {
+          '浏览器内存不足时可能变慢甚至失败，建议分批。\n\n仍然继续？')) {
         return;
       }
-      void mem;
     }
 
     st.busy = true;
@@ -241,8 +238,14 @@ window.ITB = window.ITB || {};
     hideResult();
     setProgress(0, selected.length, '准备中…');
 
-    ITB.exporter.runSection(id, onProgress, function () {
-      return st.cancelRequested;
+    /* runSection 中部分校验为同步抛出（例如某 js 文件未加载）。
+       若直接调用，异常会绕过后续 .catch；而此时 st.busy 与
+       setBusyUI(true) 已生效，界面将停留在「运行中」。
+       因此用 Promise.resolve().then() 包装为异步，确保 .catch 能够捕获。 */
+    Promise.resolve().then(function () {
+      return ITB.exporter.runSection(id, onProgress, function () {
+        return st.cancelRequested;
+      });
     }).then(function (res) {
       finishRun();
 
@@ -252,10 +255,10 @@ window.ITB = window.ITB || {};
         return;
       }
 
-      var filename = outputName(id, res);
+      var filename = outputName(id);
 
-      /* 下载可能失败（比如被浏览器拦下），单独兜住，
-         免得文件没发出却报成「完成」 */
+      /* 下载可能失败（例如被浏览器拦截），单独捕获，
+         避免文件未发出却报告为「完成」 */
       try {
         U.downloadBlob(res.blob, filename);
       } catch (e) {
@@ -265,7 +268,7 @@ window.ITB = window.ITB || {};
         return;
       }
 
-      reportSuccess(id, res, filename);
+      reportSuccess(res, filename);
     }).catch(function (err) {
       finishRun();
 
@@ -279,7 +282,7 @@ window.ITB = window.ITB || {};
     });
   }
 
-  function reportSuccess(id, res, filename) {
+  function reportSuccess(res, filename) {
     var sub;
     var failCount = (res.errors && res.errors.length) || 0;
 
@@ -299,13 +302,10 @@ window.ITB = window.ITB || {};
       showResult('ok', '完成：' + filename, sub);
       U.toast('完成：' + filename, 'ok');
     }
-
-    void id;
   }
 
-  /** 输出文件名（不带扩展名，扩展名按 kind 拼） */
-  function outputName(id, res) {
-    var st = ITB.state;
+  /** 输出文件名：主干不含扩展名，扩展名按 kind 追加 */
+  function outputName(id) {
     var stamp = U.dateStamp();
     var prefix = {
       shell: '重命名',
@@ -314,26 +314,38 @@ window.ITB = window.ITB || {};
       pdf: '合并'
     }[id] || '输出';
 
-    // 用第一张图所在目录名，或者文件名主干
-    var base = '';
-    var first = st.files[0];
-    if (first) {
-      var rel = first.relPath || '';
-      if (rel) {
-        var slash = rel.indexOf('/');
-        if (slash > 0) base = rel.slice(0, slash);
-      }
-      if (!base) base = U.splitExt(first.name).base.replace(/[\s_\-]*\d+$/, '');
-    }
-    base = (base || '图片').replace(/[\\/:*?"<>|]/g, '_');
+    /* 名称主干由分区提供（sections.js 的 pdf.autoBase），
+       使预览名称与实际生成名称遵循同一套规则。
+       取第一张**参与本次处理**的图片，而非文件池中的第一张。 */
+    var base = (id === 'pdf'
+      ? ITB.sections.get('pdf').autoBase()
+      : firstSelectedBase()) || '图片';
+    base = base.replace(/[\\/:*?"<>|]/g, '_');
 
     if (id === 'pdf') {
       var custom = ITB.sections.get('pdf').outName();
       if (custom) return sanitize(custom) + '.pdf';
-      return base + '_' + stamp + '.pdf';
+      // 自动命名：时间戳可关闭，适用于固定输出文件名的用法
+      return ITB.sections.get('pdf').stampOn()
+        ? base + '_' + stamp + '.pdf'
+        : base + '.pdf';
     }
 
     return base + '_' + prefix + '_' + stamp + '.zip';
+  }
+
+  /** 三个 ZIP 分区共用的命名规则：第一张参与处理图片的目录名，或文件名主干 */
+  function firstSelectedBase() {
+    var picked = ITB.selectedFiles();
+    if (!picked.length) return '';
+
+    var first = picked[0];
+    var rel = first.relPath || '';
+    if (rel) {
+      var slash = rel.indexOf('/');
+      if (slash > 0) return rel.slice(0, slash);
+    }
+    return U.splitExt(first.name).base.replace(/[\s_\-]*\d+$/, '');
   }
 
   function sanitize(s) {
@@ -370,7 +382,7 @@ window.ITB = window.ITB || {};
     refreshChrome();
   }
 
-  /** 手动调整过顺序（拖拽 / 方向键）：只影响页序和编号，刷新预览即可 */
+  /** 手动调整顺序（拖拽 / 方向键）后：仅影响页序与编号，刷新预览即可 */
   function onOrderChanged() {
     ITB.pool.render();
     ITB.sections.refreshAll();
@@ -383,7 +395,7 @@ window.ITB = window.ITB || {};
     refreshChrome();
   }
 
-  /** 只是勾选变了：各分区的预览要跟着更新，但不用重建文件池 */
+  /** 仅勾选状态变化：需更新各分区预览，无需重建文件池 */
   function onSelectionChanged() {
     ITB.sections.refreshAll();
     ITB.pool.render();
@@ -430,7 +442,7 @@ window.ITB = window.ITB || {};
     for (var i = 0; i < list.length; i++) list[i].disabled = busy;
 
     if (!busy) {
-      // 交回各分区自己决定按钮是否可用
+      // 交回各分区自行决定按钮的可用状态
       ITB.sections.refreshAll();
     }
   }
@@ -454,7 +466,7 @@ window.ITB = window.ITB || {};
     U.el('div', { cls: 'result-title', text: title, parent: ui.resultBox });
 
     if (sub) {
-      // sub 里可能有换行
+      // sub 可能包含换行
       var parts = String(sub).split('\n');
       for (var i = 0; i < parts.length; i++) {
         U.el('div', { cls: i === 0 ? 'result-sub' : 'result-sub mono', text: parts[i], parent: ui.resultBox });
@@ -482,15 +494,11 @@ window.ITB = window.ITB || {};
      ============================================================ */
 
   ITB.app = {
-    refresh: refreshChrome,
     renderPool: function () { ITB.pool.render(); },
     onDataChanged: onDataChanged,
     onSelectionChanged: onSelectionChanged,
     onOrderChanged: onOrderChanged,
-    onSettingsChanged: onSettingsChanged,
-    switchTab: switchTab,
-    currentTab: function () { return current; },
-    runSection: execute
+    onSettingsChanged: onSettingsChanged
   };
 
   if (document.readyState === 'loading') {

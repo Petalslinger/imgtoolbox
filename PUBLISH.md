@@ -2,10 +2,10 @@
 
 目标仓库：**https://github.com/Petalslinger/imgtoolbox**
 
-这个项目已经在 `imgtoolbox/` 目录里准备好了（`LICENSE`、`.gitignore` 都有）。
-下面命令**全部在 `D:\dsh\imgtoolbox` 目录里执行**。
+本项目已在当前目录准备就绪（`LICENSE`、`.gitignore` 均已包含）。
+以下命令**全部在项目根目录（即放置 `index.html` 的那一层）执行**。
 
-> 我（AI）执行不了命令，所以最后这几步得你自己跑。复制粘贴即可。
+> 这些命令需由使用者在本机执行，直接复制粘贴即可。
 
 ---
 
@@ -13,10 +13,10 @@
 
 打开 https://github.com/Petalslinger/imgtoolbox
 
-- 如果页面显示 **"Quick setup — if you've done this kind of thing before"**，说明是空仓库，可以直接进第二步
-- 如果里面已经有 `README.md` 之类的文件，那就**不要**用下面的 `git init` 流程，
-  改成先 `git clone https://github.com/Petalslinger/imgtoolbox.git`，
-  再把文件拷进去提交
+- 如果页面显示 **"Quick setup — if you've done this kind of thing before"**，说明是空仓库，可直接进入第二步
+- 如果里面已经有 `README.md` 之类的文件，那就**不要**使用下面的 `git init` 流程，
+  应先执行 `git clone https://github.com/Petalslinger/imgtoolbox.git`，
+  再把文件复制进去提交
 
 ---
 
@@ -25,12 +25,12 @@
 打开 PowerShell 或 Git Bash，粘贴：
 
 ```powershell
-cd D:\dsh\imgtoolbox
+cd <项目根目录>
 
 # 如果这个目录还没被别的仓库管着，就先初始化
 git init
 
-# 如果 D:\dsh 本身已经是个 git 仓库，imgtoolbox 就会跟着它走，
+# 如果上一级目录本身已经是个 git 仓库，这里会跟着它走，
 # 那种情况下上面那行会提示 "Reinitialized existing Git repository"，
 # 属于正常，继续往下走即可。
 
@@ -38,7 +38,7 @@ git add -A
 git status
 ```
 
-`git status` 是让你**先看一眼要提交什么**。确认列表里是这些文件：
+`git status` 用于**确认待提交内容**。确认列表中包含这些文件：
 
 ```
 .gitignore
@@ -49,31 +49,32 @@ index.html
 selftest.html
 css/style.css
 js/*.js          （13 个模块）
-tools/README.txt
 ```
 
-**如果里面出现了你不想公开的东西**（比如测试用的图片、`node_modules`），
-先 `git rm --cached 那个文件` 或者补进 `.gitignore`，再继续。
+**如果列表中出现了不宜公开的内容**（比如测试用的图片、`node_modules`），
+先执行 `git rm --cached 那个文件` 或将其补进 `.gitignore`，再继续。
 
-确认没问题后提交：
+确认无误后提交：
 
 ```powershell
-git commit -m "图片工具箱：四个独立分区（重命名 / 改分辨率 / 转格式 / 导出 PDF）" -m "纯前端、零依赖、零构建：双击 index.html 就能用，图片不上传。
+git commit -m "图片工具箱：四个独立分区（重命名 / 改分辨率 / 转格式 / 导出 PDF）" -m "纯前端、零依赖、零构建：双击 index.html 即可使用，图片不上传。
 
-- 四个分区互不干扰，共用左栏文件池（顺序即导出顺序）
-- 自研 PDF 写出器：统一重编码为基线 JPEG 内嵌，写出后自检
-  （逐字段解析 xref、核对对象偏移、验证流完整性），验不过就报错
-- 自研 ZIP 写出器：CRC-32 + CompressionStream deflate，UTF-8 文件名
-- 像素处理在 Web Worker 里跑，实现只有一份（源码字符串注入 worker）
-- selftest.html：浏览器里跑 11 组断言，含 pdf.js 交叉验证
-- 沿用原 png2pdf 的行为：数字感知排序、透明垫白底、1px = 1pt"
+- 四个分区相互独立，共用文件池（顺序即导出顺序）
+- 本仓库实现的 PDF 写出器：统一重编码为基线 JPEG 内嵌，生成后执行结构自检
+  （解析 xref、核对对象偏移、校验流边界与 JPEG 完整性），校验不通过即报错
+- 本仓库实现的 ZIP 写出器：CRC-32 + CompressionStream deflate，UTF-8 文件名
+- 像素处理在 Web Worker 中执行，实现仅一份（以源码字符串注入 Worker），
+  注入清单带静态检查，回退主线程时在控制台给出说明
+- 导出 PDF 支持统一页面宽度：按最宽一张等比缩放，各页等宽且不变形
+- selftest.html：浏览器中执行十余组断言，含 pdf.js 独立实现交叉验证
+- 沿用原 png2pdf 的行为：数字感知排序、透明区填充白底、1px = 1pt"
 ```
 
 ---
 
 ## 第三步：设分支名并推上去
 
-GitHub 现在默认分支叫 `main`，老版本 git 默认叫 `master`，直接统一成 `main`：
+GitHub 当前默认分支为 `main`，旧版本 git 默认为 `master`，此处统一为 `main`：
 
 ```powershell
 git branch -M main
@@ -81,13 +82,13 @@ git remote add origin https://github.com/Petalslinger/imgtoolbox.git
 git push -u origin main
 ```
 
-第一次推送会弹出浏览器让你登录授权，跟着走就行。
+首次推送会弹出浏览器进行登录授权，按提示完成即可。
 
 ---
 
 ## 如果 git 提示 "remote origin already exists"
 
-说明 `D:\dsh` 那个仓库已经有 origin 了。改成换地址：
+说明 `D:\dsh` 仓库已经配置了 origin。此时改用更换地址的方式：
 
 ```powershell
 git remote set-url origin https://github.com/Petalslinger/imgtoolbox.git
@@ -96,33 +97,35 @@ git push -u origin main
 
 ---
 
-## 如果 D:\dsh 本身是个仓库，而你只想传这一个子目录
+## 上一级目录本身是仓库、而只需提交该子目录时
 
-那就别在 `imgtoolbox` 里 `git init`，改成用 `git subtree`，或者干脆
-把 `imgtoolbox` 目录**复制到仓库外面**（比如 `D:\projects\imgtoolbox`），
-在那里重新 `git init`，这样最干净。
+此时不应在此处执行 `git init`，可改用 `git subtree`；或将整个项目目录
+**复制到仓库之外**，在其副本中重新执行 `git init`，该方式最为清晰。
 
 ---
 
-## 顺带：仓库设置建议
+## 仓库设置建议
 
-推上去之后可以在仓库页面做两件小事：
+推送完成后，可在仓库页面进行以下两项设置：
 
-1. **About 里勾 Topics**：`image-processing` `batch-rename` `pdf` `browser`
+1. **在 About 中设置 Topics**：`image-processing` `batch-rename` `pdf` `browser`
    `no-dependencies` `offline` `canvas`
-2. **About 里填 Website**：如果开了 GitHub Pages，可以指向 `index.html`——
-   不过要注意：如果开 Pages，浏览器会用 `https://` 加载，此时 `file://` 下
-   被 CORS 拦掉的 `fetch` 反而能用了（`selftest.html` 的第二组会从"跳过"变成真检查）
+2. **在 About 中填写 Website**：如果启用了 GitHub Pages，可以指向 `index.html`。
+   需要注意：启用 Pages 后，浏览器会用 `https://` 加载，此时在 `file://` 下
+   被 CORS 阻止的 `fetch` 反而可用（`selftest.html` 的第二组会从"跳过"变为实际检查）
 
 ---
 
-## 别忘了
+## 待手动删除的遗留文件
 
-`js/steps.js` 和 `js/preview.js` 已经是废弃的空壳（旧流水线设计的遗留），
-我在这台机器上删不掉文件，你可以直接删：
+`js/steps.js` 和 `js/preview.js`（旧「可编排队列」设计的空壳）现在只剩一段
+说明，**文件本身仍存在于磁盘上**——本机环境无法删除文件。执行：
 
 ```powershell
-Remove-Item js\steps.js, js\preview.js, .probe, tools\make-selftest.js
+Remove-Item js\steps.js, js\preview.js
 git add -A
 git commit -m "删掉旧流水线设计的遗留空壳"
 ```
+
+`tools\` 目录（其中只有一份说明自身可以删除的 `README.txt` 和一个未被采用的
+生成脚本）同理，整体删除即可。

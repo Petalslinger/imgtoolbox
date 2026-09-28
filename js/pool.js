@@ -1,9 +1,9 @@
 /* ============================================================
    pool.js —— 左栏文件池
-   负责：收文件、去重、量尺寸、排序、勾选、拖拽手动排序、渲染
+   职责：接收文件、去重、尺寸测量、排序、勾选、拖拽手动排序、渲染
 
-   排序沿用原 png2pdf 的两套：natural（数字感知）和字典序，
-   并保留「手动拖过之后就不再自动重排」的语义。
+   排序沿用 png2pdf 的两套规则：natural（数字感知）与字典序，
+   并保留手动调整顺序后不再自动重排的语义。
    ============================================================ */
 
 window.ITB = window.ITB || {};
@@ -14,13 +14,13 @@ window.ITB = window.ITB || {};
   var U = ITB.util;
 
   var listEl = null;
-  // 缩略图直接缓存 canvas 元素，渲染时 clone 一份插进去。
-  // 比 objectURL 干净：没有 URL 生命周期问题，也不会因为重渲染
-  // 撤销了还挂在 DOM 上的旧 URL 而闪裂。
+  // 缩略图缓存 canvas 元素本身，渲染时 clone 后插入。
+  // 相比 objectURL 无 URL 生命周期管理问题，也不会因重渲染撤销
+  // 仍挂载于 DOM 的旧 URL 而导致显示中断。
   var thumbCache = Object.create(null);   // id → canvas
   var thumbPending = Object.create(null);
-  // 缩略图异步生成、直接替换 DOM 节点，不触发整块重渲染，
-  // 所以每个文件「输出时的名字」得缓存下来，补图时才能补上这一行
+  // 缩略图异步生成并直接替换 DOM 节点，不触发整体重渲染，
+  // 因此需缓存每个文件的输出名称，以便补图时同步补充该行
   var finalNameCache = Object.create(null);
 
   /* ── 初始化 ─────────────────────────────────────────────── */
@@ -43,7 +43,7 @@ window.ITB = window.ITB || {};
     var existing = Object.create(null);
     var i;
 
-    // 用 名字+大小+修改时间 做去重指纹，比只比名字可靠
+    // 以 名称+大小+修改时间 作为去重标识，比仅比较名称更可靠
     for (i = 0; i < st.files.length; i++) {
       var f0 = st.files[i];
       existing[fp(f0.name, f0.size, f0.lastModified)] = true;
@@ -76,7 +76,7 @@ window.ITB = window.ITB || {};
     st.files = st.files.concat(incoming);
     applySort();
 
-    // 顺手把尺寸量出来（只读文件头，很快），预览要用
+    // 同步触发尺寸测量（仅读取文件头），供预览使用
     measure(incoming, onChanged);
     onChanged();
 
@@ -124,7 +124,7 @@ window.ITB = window.ITB || {};
       var r = natural
         ? U.naturalCompare(a.name, b.name)
         : U.lexCompare(a.name, b.name);
-      // 名字完全一样时用 id 兜底，保证排序结果稳定
+      // 名称完全相同时以 id 作为次级键，保证排序结果稳定
       return r !== 0 ? r * dir : (a.id - b.id);
     };
   }
@@ -132,10 +132,9 @@ window.ITB = window.ITB || {};
   function applySort() {
     var st = ITB.state;
     st.files.sort(comparator());
-    st.baseOrder = st.files.map(function (f) { return f.id; });
   }
 
-  /** 界面上的排序选项变了 */
+  /** 界面排序选项变更 */
   function setSort(mode, order) {
     var st = ITB.state;
     st.sortMode = mode;
@@ -143,14 +142,14 @@ window.ITB = window.ITB || {};
     if (!st.manualOrder) applySort();
   }
 
-  /** 还原成自动排序 */
+  /** 恢复自动排序 */
   function resetOrder() {
     var st = ITB.state;
     st.manualOrder = false;
     applySort();
   }
 
-  /** 手动把 fromId 挪到 toId 的位置（前或后） */
+  /** 将 fromId 移动至 toId 的位置（前或后） */
   function moveBefore(fromId, toId, after) {
     var st = ITB.state;
     var from = indexOf(fromId);
@@ -158,7 +157,7 @@ window.ITB = window.ITB || {};
     if (from < 0 || to < 0 || from === to) return false;
 
     var item = st.files.splice(from, 1)[0];
-    // 拔掉之后目标下标可能往前挪了一位
+    // 移除元素后目标下标可能前移一位
     to = indexOf(toId);
     st.files.splice(after ? to + 1 : to, 0, item);
     st.manualOrder = true;
@@ -213,26 +212,15 @@ window.ITB = window.ITB || {};
     var st = ITB.state;
     releaseThumbs();
     st.files = [];
-    st.baseOrder = [];
     st.manualOrder = false;
     st.sampleId = null;
-    st.extOverrides = {};
-    if (onChanged) onChanged();
-  }
-
-  function removeOne(id, onChanged) {
-    var st = ITB.state;
-    var i = indexOf(id);
-    if (i < 0) return;
-    delete thumbCache[id];
-    st.files.splice(i, 1);
-    if (st.sampleId === id) st.sampleId = null;
     if (onChanged) onChanged();
   }
 
   /* ── 渲染 ───────────────────────────────────────────────── */
 
-  function render(onChanged) {
+  /** 仅负责渲染文件池；数据变更后由调用方另行触发相应分区的刷新 */
+  function render() {
     var st = ITB.state;
     U.clear(listEl);
 
@@ -245,8 +233,10 @@ window.ITB = window.ITB || {};
       return;
     }
 
-    // 在文件池里也显示「这一张导出时会变成什么名字」，方便逐条核对。
-    // 名字变化来自重命名分区，后缀变化来自转格式分区——两者都反映在这里。
+    /* 每行显示该文件导出时的名称（**预览**，非单次执行结果）。
+       该名称由 shellPlan() 的重命名结果叠加 formatExt() 的后缀变更构成；
+       重命名与格式转换分属两个相互独立的分区，一次只执行其一，
+       因此此处是两个分区分别作用于同一文件的结果，仅作对照展示。 */
     var finalNames = Object.create(null);
     try {
       var built = ITB.sections.shellPlan();
@@ -264,7 +254,7 @@ window.ITB = window.ITB || {};
         if (name !== item.originalName) finalNames[item.file.id] = name;
       }
     } catch (e) {
-      finalNames = Object.create(null);   // 参数有误时不显示，各分区会另外提示
+      finalNames = Object.create(null);   // 参数错误时不显示，各分区另行提示
     }
     finalNameCache = finalNames;
 
@@ -283,8 +273,6 @@ window.ITB = window.ITB || {};
         parent: listEl
       });
     }
-
-    void onChanged;
   }
 
   function renderRow(item, seq, withThumb, finalName) {
@@ -299,8 +287,7 @@ window.ITB = window.ITB || {};
     // 勾选
     var cb = U.el('input', {
       cls: 'pool-check',
-      attrs: { type: 'checkbox' },
-      props: { checked: item.selected }
+      attrs: { type: 'checkbox' },      props: { checked: item.selected }
     });
     cb.addEventListener('change', function () {
       item.selected = cb.checked;
@@ -317,7 +304,7 @@ window.ITB = window.ITB || {};
       U.el('span', { cls: 'pool-thumb pool-thumb-ph', text: extTag(item.name), parent: row });
     }
 
-    // 名字 + 元信息
+    // 名称与元信息
     var main = U.el('div', { cls: 'pool-main', parent: row });
     var nameEl = U.el('div', { cls: 'pool-name', text: item.name, parent: main });
     var meta = (item.relPath ? item.relPath + ' · ' : '') +
@@ -325,7 +312,7 @@ window.ITB = window.ITB || {};
       U.formatBytes(item.size);
     U.el('div', { cls: 'pool-meta', text: meta, parent: main });
 
-    // 会被重命名的，多显示一行「输出时会变成什么」——比只在右栏看前三条有用得多
+    // 名称将发生变化的条目额外显示输出名称，优于仅在右栏查看前三条
     if (finalName) {
       U.el('div', { cls: 'pool-meta is-out', text: '→ ' + finalName, parent: main });
     }
@@ -336,18 +323,17 @@ window.ITB = window.ITB || {};
     // 拖拽手柄
     U.el('span', { cls: 'pool-grip', text: '≡', parent: row, attrs: { title: '拖动调整顺序' } });
 
-    nameEl.dataset.role = 'name';
+    // 点击该行即将其设为预览样本（改分辨率分区据此计算示例尺寸）
     row.addEventListener('mousedown', function () {
       st.sampleId = item.id;
     });
-
     return row;
   }
 
   function makeThumb(item) {
     var cached = thumbCache[item.id];
     if (cached) {
-      var clone = cached.cloneNode(false);      // 浅拷贝，像素数据共享
+      var clone = cached.cloneNode(false);      // 浅拷贝，共享像素数据
       clone.className = 'pool-thumb';
       clone.removeAttribute('data-thumb-for');
       return clone;
@@ -364,7 +350,7 @@ window.ITB = window.ITB || {};
         thumbCache[item.id] = canvas;
 
         var slot = listEl.querySelector('[data-thumb-for="' + item.id + '"]');
-        if (!slot || !slot.parentNode) return;   // 已经被重渲染掉了
+        if (!slot || !slot.parentNode) return;   // 已被重渲染移除
 
         var ready = canvas.cloneNode(false);
         ready.className = 'pool-thumb';
@@ -373,7 +359,7 @@ window.ITB = window.ITB || {};
         var parent = slot.parentNode;
         parent.replaceChild(ready, slot);
 
-        // 补上「输出时的名字」这一行（缩略图是异步来的，整块重渲染时还没有它）
+        // 补充输出名称行（缩略图异步到达，整体重渲染时尚不可用）
         var outName = finalNameCache[item.id];
         var mainBox = parent.querySelector('.pool-main');
         if (outName && mainBox && !mainBox.querySelector('.pool-meta.is-out')) {
@@ -397,7 +383,7 @@ window.ITB = window.ITB || {};
       ctx.fillRect(0, 0, size, size);
       if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
 
-      // 等比缩放进框内并居中，不裁切
+      // 等比缩放至框内并居中，不裁切
       var scale = Math.min(size / bmp.width, size / bmp.height);
       var w = Math.max(1, Math.round(bmp.width * scale));
       var h = Math.max(1, Math.round(bmp.height * scale));
@@ -537,7 +523,6 @@ window.ITB = window.ITB || {};
   ITB.pool = {
     init: init,
     addFiles: addFiles,
-    applySort: applySort,
     setSort: setSort,
     resetOrder: resetOrder,
     moveBefore: moveBefore,
@@ -546,9 +531,7 @@ window.ITB = window.ITB || {};
     setAllSelected: setAllSelected,
     invertSelection: invertSelection,
     removeAll: removeAll,
-    removeOne: removeOne,
-    render: render,
-    indexOf: indexOf
+    render: render
   };
 
 })(window.ITB);

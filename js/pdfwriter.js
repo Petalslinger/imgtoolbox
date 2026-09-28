@@ -1,20 +1,16 @@
 /* ============================================================
-   pdfwriter.js —— 自研 PDF 写出器，零依赖
-   替代 pdf-lib。设计约束（刻意收窄，换取可靠）：
+   pdfwriter.js —— PDF 写出器（零依赖，替代 pdf-lib）
 
-     · 只接受两种输入，正好是 canvas.toBlob() 能产出的东西：
-         JPEG          → /DCTDecode，原始字节直接内嵌，不解码不重编码
-         8 位非隔行 PNG → /FlateDecode，IDAT 片段原样搬运
-       调色板 / 16 位 / 隔行扫描的 PNG 由上层先用 canvas 规范化。
-     · 一张图 = 一页，页面尺寸 = 图片像素尺寸，1px = 1pt。
+   支持的输入仅两种，与 canvas.toBlob() 的输出对应：
+     JPEG           → /DCTDecode，原始字节直接内嵌，不解码不重编码
+     8 位非隔行 PNG → /FlateDecode，IDAT 片段原样搬运
+   调色板 / 16 位 / 隔行扫描的 PNG 由上层先用 canvas 规范化。
 
-   【最重要的一条】build() 写完一版之后会**自己验一遍**：
-     走完整张交叉引用表、核对每个对象偏移、把每个 /FlateDecode 流
-     真的解压出来，检查解出的字节数是否等于
-        高度 × (1 + 宽度 × 通道数)
-     对不上的页会被换成 JPEG 版本重写一版。
-   因为「文件能下载但打不开」是最坏的失败模式，宁可在写出时多花
-   一点 CPU，也不能把一个坏 PDF 交出去。
+   一图一页，页面尺寸 = 图片像素尺寸（1px = 1pt）。
+
+   build() 在拼装后执行结构自检：解析交叉引用表、核对对象偏移、
+   确认每个流在 /Length 声明位置后紧跟 endstream、核对内嵌图完整性
+   （JPEG 校验 SOI/EOI）。自检不通过则抛错，不产出文件。
    ============================================================ */
 
 window.ITB = window.ITB || {};
@@ -44,7 +40,7 @@ window.ITB = window.ITB || {};
     return null;
   }
 
-  /* ── JPEG：扫 marker 找 SOF，拿宽高和分量数 ─────────────── */
+  /* ── JPEG：遍历 marker 定位 SOF，读取宽高与分量数 ───────── */
 
   function parseJpeg(bytes) {
     var i = 2;
@@ -75,8 +71,8 @@ window.ITB = window.ITB || {};
         var cs;
         if (ncomp === 1) cs = 'DeviceGray';
         else if (ncomp === 3) cs = 'DeviceRGB';
-        // CMYK 的 JPEG 在 PDF 里要按 Adobe 反相约定处理，浏览器不会产出，
-        // 直接判为不支持，让上层重新编码，总比写出颜色反了的文件好
+        /* 4 分量 JPEG 按 Adobe 反相约定解释，canvas 不会产出该格式。
+           判为不支持并交由上层重新编码，避免写出色彩反转的文件。 */
         else return null;
 
         return { format: 'jpeg', width: width, height: height, colorspace: cs };
@@ -101,7 +97,7 @@ window.ITB = window.ITB || {};
 
     if (!width || !height) return null;
 
-    // 4=灰度+alpha，6=RGB+alpha：告诉上层「这张需要垫白底」
+    // 4=灰度+alpha；6=RGB+alpha
     var hasAlpha = (ctype === 4 || ctype === 6);
 
     if (depth !== 8) return { format: 'png', needsFlatten: true, reason: 'bit-depth' };
@@ -113,9 +109,8 @@ window.ITB = window.ITB || {};
     else if (ctype === 2 || ctype === 6) cs = 'DeviceRGB';
     else return { format: 'png', needsFlatten: true, reason: 'colortype' };
 
-    // 扫 chunk，把 IDAT 片段收集起来。
-    // 顺手把「看到了哪些 chunk」记下来：万一 IDAT 没扫到，
-    // 这些诊断信息能让失败信息说清到底发生了什么。
+    /* 遍历 chunk 收集 IDAT 片段，同时记录已见 chunk 列表：
+       IDAT 缺失时，这些信息用于定位原因。 */
     var off = 8;
     var idats = [];
     var idatLength = 0;
@@ -144,8 +139,8 @@ window.ITB = window.ITB || {};
     }
 
     if (!idats.length) {
-      // 返回一个带诊断的「需要重编码」结果，而不是 null。
-      // 上层看到这个会走 canvas 重编码，而不是把图丢掉。
+      // 返回带诊断信息的「需要重编码」结果而非 null：上层据此走 canvas 重编码，
+      // 而不是丢弃该图。
       return {
         format: 'png',
         needsFlatten: true,
@@ -174,8 +169,8 @@ window.ITB = window.ITB || {};
   }
 
   /**
-   * 读图片字节的元信息。
-   *   needsFlatten=true 表示这张图不能直接内嵌，得先垫白底重编码。
+   * 读取图片字节的元信息。
+   * needsFlatten=true 表示该图不可直接内嵌，须先填充白底后重编码。
    */
   function parseImage(bytes) {
     if (isPng(bytes)) return parsePng(bytes);
@@ -210,7 +205,7 @@ window.ITB = window.ITB || {};
      三、写出器
      ============================================================ */
 
-  // 每张图原始扫描线的规定长度，用来验证解压结果
+  // 各色彩空间的通道数，用于校验 Flate 流解压后的扫描线长度
   var CHANNELS = { DeviceGray: 1, DeviceRGB: 3 };
 
   function PdfWriter() {
@@ -218,9 +213,7 @@ window.ITB = window.ITB || {};
     this.meta = {};
   }
 
-  /**
-   * 加一页：JPEG 原样内嵌。
-   */
+  /** 追加一页：JPEG 原样内嵌 */
   PdfWriter.prototype.addJpegPage = function (bytes, width, height, colorspace, title) {
     this.pages.push({
       format: 'jpeg',
@@ -234,7 +227,7 @@ window.ITB = window.ITB || {};
   };
 
   /**
-   * 加一页：8 位无 alpha 的 PNG，IDAT 片段原样搬运。
+   * 追加一页：8 位无 alpha 的 PNG，IDAT 片段原样搬运。
    * @param {object} info parseImage() 的返回值
    */
   PdfWriter.prototype.addPngPage = function (info) {
@@ -247,7 +240,7 @@ window.ITB = window.ITB || {};
   };
 
   /**
-   * 组装完整 PDF 字节流。**异步**：因为要真的把流解压出来验证。
+   * 组装完整 PDF 字节流。返回 Promise，因为需要解压流进行校验。
    * @returns {Promise<{blob, bytes, pages, reencoded}>}
    */
   PdfWriter.prototype.build = function () {
@@ -255,7 +248,7 @@ window.ITB = window.ITB || {};
 
     var self = this;
 
-    // 结构自检：报清楚是哪一页缺什么，而不是在深层循环里炸
+    // 逐页检查必需字段，错误信息指明具体页码与缺失项
     for (var v = 0; v < this.pages.length; v++) {
       var page = this.pages[v];
       var who = '第 ' + (v + 1) + ' 页' + (page && page.title ? '（' + page.title + '）' : '');
@@ -277,11 +270,9 @@ window.ITB = window.ITB || {};
       }
     }
 
-    /* 拼一版，然后自己验一遍。
-       现在是「统一重编码成基线 JPEG」的路线，所以每一页都应该是
-       /DCTDecode；validate() 会逐字段走交叉引用表、并把每个图片流
-       真的解压出来核对尺寸。验不过就报错，绝不把坏文件交出去——
-       「能下载但打不开」是比「明确报错」糟糕得多的结果。 */
+    /* 拼装后执行自检。当前流水线统一重编码为基线 JPEG，因此每页均为
+       /DCTDecode：validate() 解析交叉引用表、核对对象偏移，并校验流完整性
+       与 JPEG 头尾。任一项不通过即抛错，不产出文件。 */
     var bytes = this._assemble();
 
     return validate(bytes).then(function (rep) {
@@ -337,7 +328,9 @@ window.ITB = window.ITB || {};
 
     function end() { sink.text('endobj\n'); }
 
-    /* 二进制标记行，告诉工具这个文件含二进制内容 */
+    /* 文件头：%PDF-<版本> 必须位于文件起始 5 个字节。
+       紧随其后的二进制标记行是可选的，用于提示传输工具按二进制处理。 */
+    sink.text('%PDF-1.4\n');
     sink.push(new Uint8Array([0x25, 0xE2, 0xE3, 0xCF, 0xD3, 0x0A]));
 
     var pagesId = reserve();
@@ -353,7 +346,7 @@ window.ITB = window.ITB || {};
       var imgId = reserve();
       var pageId = reserve();
 
-      /* 内容流：把图片铺满整页 */
+      // 内容流：将图片缩放到整页
       var contentBytes = U.latin1Bytes('q\n' + w + ' 0 0 ' + h + ' 0 0 cm\n/Im0 Do\nQ\n');
 
       mark(contentId);
@@ -399,18 +392,19 @@ window.ITB = window.ITB || {};
       ' /Kids [' + kids.join(' ') + '] >>\n');
     end();
 
-    /* 预留的标准字体，方便以后要加页眉页脚 */
+    /* 标准字体对象。当前内容不引用它，保留供后续添加文字内容使用；
+       删除需同步调整对象编号与 xref。 */
     mark(fontId);
     sink.text('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica' +
       ' /Encoding /WinAnsiEncoding >>\n');
     end();
 
-    /* 文档信息 */
+    /* 文档信息。含非 ASCII 的字段按 UTF-16BE 十六进制串写出 */
     var infoId = reserve();
     mark(infoId);
-    sink.text('<< /Producer (' + pdfEscape(this.meta.producer || 'imgtoolbox') + ')' +
-      ' /Creator (' + pdfEscape(this.meta.creator || 'imgtoolbox') + ')');
-    if (this.meta.title) sink.text(' /Title (' + pdfEscape(this.meta.title) + ')');
+    sink.text('<< /Producer ' + pdfText(this.meta.producer || 'imgtoolbox') +
+      ' /Creator ' + pdfText(this.meta.creator || 'imgtoolbox'));
+    if (this.meta.title) sink.text(' /Title ' + pdfText(this.meta.title));
     sink.text(' >>\n');
     end();
 
@@ -420,13 +414,15 @@ window.ITB = window.ITB || {};
     sink.text('<< /Type /Catalog /Pages ' + pagesId + ' 0 R >>\n');
     end();
 
-    /* 交叉引用表：每行必须正好 20 字节，偏移量左补零到 10 位 */
+    /* 交叉引用表：每条 20 字节（10 位偏移 + 空格 + 5 位世代号 + 空格 +
+       1 位类型 + 2 字节 EOL）。行尾必须是 \r\n，否则每条会短 1 字节，
+       按固定 20 字节步进解析的阅读器将从此错位。 */
     var xrefOffset = sink.size;
     var count = offsets.length;
-    var rows = ['xref\n0 ' + count + '\n', '0000000000 65535 f \n'];
+    var rows = ['xref\n0 ' + count + '\n', '0000000000 65535 f\r\n'];
 
     for (i = 1; i < count; i++) {
-      rows.push(U.pad(offsets[i] || 0, 10) + ' 00000 n \n');
+      rows.push(U.pad(offsets[i] || 0, 10) + ' 00000 n\r\n');
     }
     sink.text(rows.join(''));
 
@@ -435,7 +431,7 @@ window.ITB = window.ITB || {};
       ' /Info ' + infoId + ' 0 R >>\n' +
       'startxref\n' + xrefOffset + '\n%%EOF\n');
 
-    /* 按声明顺序拼成单个字节数组 */
+    // 按写入顺序拼成单个字节数组
     var total = sink.size;
     var out = new Uint8Array(total);
     var at = 0;
@@ -447,7 +443,7 @@ window.ITB = window.ITB || {};
   };
 
   /* ============================================================
-     四、验证：像真正的阅读器那样把 PDF 走一遍
+     四、验证：按解析顺序完整遍历 PDF
      ============================================================ */
 
   function inflateRaw(bytes) {
@@ -467,12 +463,11 @@ window.ITB = window.ITB || {};
 
   /**
    * 校验已经拼好的 PDF 字节。
-   * @returns {Promise<{problems:string[], pages:Array, reassemble:boolean}>}
+   * @returns {Promise<{problems:string[], pages:Array}>}
    */
   function validate(pdf) {
     var problems = [];
     var pages = [];
-    var reassemble = false;
 
     var i;
     var text = '';
@@ -525,12 +520,10 @@ window.ITB = window.ITB || {};
           var entry = text.substr(p, 20);
           if (entry.length < 20) { problems.push('第 ' + k + ' 条 xref 条目不足 20 字节'); break; }
 
-          if (!/^\d{10} \d{5} [nf]/.test(entry)) {
+          /* 20 字节一条：10 位偏移 + 空格 + 5 位世代号 + 空格 + 1 位类型 + \r\n
+             —— 所以类型在 [17]，行尾两字节在 [18][19]。 */
+          if (!/^\d{10} \d{5} [nf]\r\n$/.test(entry)) {
             problems.push('第 ' + k + ' 条 xref 条目格式不对：' + JSON.stringify(entry));
-          }
-          if (entry.charAt(18) !== '\n' && entry.charAt(18) !== '\r') {
-            reassemble = true;   // 结尾字节不对，重写一次
-            problems.push('第 ' + k + ' 条 xref 条目结尾不是换行');
           }
 
           var id = firstObj + k;
@@ -547,18 +540,15 @@ window.ITB = window.ITB || {};
     }
 
     /* 5. 每个 stream：用 /Length 定位数据，再逐个验证 */
-    var imgRe = /\/Subtype\s*\/Image/g;
-    var im;
-    var imgDicts = [];
-    while ((im = imgRe.exec(text)) !== null) imgDicts.push(im.index);
-
     var streamRe = /<<((?:[^<>]|<<[^>]*>>)*)>>\s*stream(\r\n|\r|\n)/g;
     var sm;
     var checks = [];
 
     while ((sm = streamRe.exec(text)) !== null) {
       var dict = sm[1];
-      var dataStart = sm.re.lastIndex;
+      // 流数据从「字典 + stream + 换行」之后开始。
+      // 必须读 streamRe.lastIndex，而不是匹配结果上的属性——匹配数组没有 lastIndex。
+      var dataStart = streamRe.lastIndex;
       var lenM = /\/Length\s+(\d+)/.exec(dict);
 
       if (!lenM) { problems.push('某个 stream 字典里没有 /Length'); continue; }
@@ -571,7 +561,6 @@ window.ITB = window.ITB || {};
         continue;
       }
       if (!/^\s*endstream/.test(text.slice(after, after + 12))) {
-        reassemble = true;
         problems.push('某个 stream 在 /Length 指定位置之后不是 endstream');
       }
 
@@ -595,11 +584,11 @@ window.ITB = window.ITB || {};
       });
     }
 
-    /* 6. 逐张验证图片流。
-          现在所有图片都是 /DCTDecode（基线 JPEG），所以主要检查两件事：
-            · 字节范围在文件内，且确实是完整的 JPEG（SOI 开头、EOI 结尾）
-            · /Width /Height /ColorSpace 齐全
-          这是我能对 JPEG「解出来的尺寸对不对」做的最强验证。 */
+    /* 6. 逐张校验图片流。当前流水线全部产出 /DCTDecode，检查项为：
+             · /Width /Height /ColorSpace 齐全
+             · 字节范围位于文件内
+             · JPEG 完整（以 SOI 开头、EOI 结尾）
+           JPEG 内部像素无法在不解码的前提下进一步验证。 */
     var imageChecks = checks.filter(function (c) { return c.isImage; });
     var pageFails = [];
     var okPages = 0;
@@ -651,8 +640,8 @@ window.ITB = window.ITB || {};
         return;
       }
 
-      /* FlateDecode（留给以后可能恢复的 PNG 无损内嵌）：
-         解压出来长度必须等于 高度 × (1 + 宽度 × 通道数) */
+      /* FlateDecode 分支（保留给后续可能恢复的 PNG 无损内嵌）：
+         解压后长度须等于 高度 × (1 + 宽度 × 通道数) */
       var ch = CHANNELS[c.colorspace];
       var expected = c.height * (1 + c.width * ch);
       var raw = pdf.subarray(c.dataStart, c.dataStart + c.length);
@@ -689,7 +678,6 @@ window.ITB = window.ITB || {};
         pages: pages,
         okPages: okPages,
         imageCount: imageChecks.length,
-        reassemble: reassemble,
         streams: checks.length
       };
     });
@@ -708,9 +696,40 @@ window.ITB = window.ITB || {};
       .replace(/[\r\n]+/g, ' ');
   }
 
+  /**
+   * 生成 PDF 字符串对象（字面量或十六进制），用于 /Title 等元数据。
+   *
+   * 纯 ASCII 写为字面量；含非 ASCII 时写为带 BOM（FEFF）的 UTF-16BE
+   * 十六进制串，这是 PDF 表示 Unicode 文本的标准形式。
+   * 不可直接写字面量：ByteSink.text 经 latin1Bytes 处理，码位 ≥256 会被
+   * 替换为 '?'，导致中文标题丢失。
+   */
+  function pdfText(s) {
+    s = String(s);
+    if (/^[\x20-\x7e]*$/.test(s)) return '(' + pdfEscape(s) + ')';
+
+    var hex = 'FEFF';
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      // 代理对成对处理，保证非 BMP 字符正确往返
+      if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) {
+        var d = s.charCodeAt(i + 1);
+        if (d >= 0xDC00 && d <= 0xDFFF) {
+          var cp = 0x10000 + ((c - 0xD800) << 10) + (d - 0xDC00);
+          hex += ('0000' + (0xD800 + ((cp - 0x10000) >> 10)).toString(16)).slice(-4).toUpperCase();
+          hex += ('0000' + (0xDC00 + ((cp - 0x10000) & 0x3FF)).toString(16)).slice(-4).toUpperCase();
+          i++;
+          continue;
+        }
+      }
+      hex += ('0000' + c.toString(16)).slice(-4).toUpperCase();
+    }
+    return '<' + hex + '>';
+  }
+
   /* ============================================================
-     五、对外的门面
-     build() 是异步的：它要解压验证，所以调用方必须 await。
+     五、对外接口
+     build() 返回 Promise，调用方必须 await。
      ============================================================ */
 
   var loaded = null;
@@ -723,7 +742,7 @@ window.ITB = window.ITB || {};
       loaded.catch(function () {});
       return loaded;
     }
-    // 解一段已知的空 deflate 流，纯粹为了把浏览器内置的字典预热好
+    // 解压一段已知的空 deflate 流，验证实现可用
     var probe = new Uint8Array([0x03, 0x00]);
     try {
       var ds = new DecompressionStream('deflate-raw');

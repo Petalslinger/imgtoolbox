@@ -1,16 +1,15 @@
 /* ============================================================
-   sections.js —— 四个互相独立的功能分区
+   sections.js —— 四个相互独立的功能分区
 
-   刻意不做「操作队列」，每个分区都是自成一体的：
-   自己一份设置、自己一个执行按钮、自己跑自己的一条路。
-   分区之间唯一共享的东西是左栏那个文件池（那只是「处理哪些图」，
-   不是流水线）。
+   不使用「操作队列」模型：每个分区各自持有一份参数、一个执行按钮，
+   走一条独立的执行路径。分区之间唯一的共享对象是文件池，
+   它仅表示「处理哪些图片」，不具备流水线语义。
 
    四个分区：
-     shell   批量重命名   → 只改名字，输出 ZIP
-     resize  改分辨率     → 只改尺寸，输出 ZIP
-     format  转格式       → 只换编码，输出 ZIP
-     pdf     导出 PDF     → 只合并成一份 PDF
+     shell   批量重命名   → 仅改文件名，输出 ZIP
+     resize  改分辨率     → 仅改尺寸，输出 ZIP
+     format  转格式       → 仅换编码，输出 ZIP
+     pdf     导出 PDF     → 合并为一份 PDF
    ============================================================ */
 
 window.ITB = window.ITB || {};
@@ -40,9 +39,6 @@ window.ITB = window.ITB || {};
         prefixOn: e.prefixOn.checked,
         prefix: e.prefix.value,
 
-        suffixOn: false,
-        suffix: '',
-
         numberOn: e.numberOn.checked,
         startAt: parseInt(e.start.value, 10) || 0,
         stepBy: parseInt(e.step.value, 10) || 1,
@@ -62,7 +58,6 @@ window.ITB = window.ITB || {};
         caseCase: U.$('rn-case'),
         prefixOn: U.$('rn-prefix-on'),
         prefix: U.$('rn-prefix'),
-        suffix: U.$('rn-suffix'),
         numberOn: U.$('rn-number-on'),
         start: U.$('rn-start'),
         step: U.$('rn-step'),
@@ -87,11 +82,11 @@ window.ITB = window.ITB || {};
         inputs[i].addEventListener('change', onChange);
       }
 
-      // 执行按钮由 app.js 统一绑定（要走进度条、取消和结果提示），
-      // 这里不再重复绑，否则一次点击会触发两次下载
+      // 执行按钮由 app.js 统一绑定（需接入进度、取消与结果提示），
+      // 此处不再重复绑定，否则一次点击会触发两次下载
     },
 
-    /** 算出每个选中文件最终会叫什么名字 */
+    /** 计算每个选中文件的最终文件名 */
     plan: function () {
       var selected = ITB.selectedFiles();
       var p = shell.params();
@@ -254,7 +249,7 @@ window.ITB = window.ITB || {};
       var radios = document.querySelectorAll('input[name="rs-mode"]');
       for (var i = 0; i < radios.length; i++) {
         radios[i].addEventListener('change', function () {
-          // 切换模式时给个合理的默认值
+          // 切换模式时填入合理的默认值
           if (resize.mode() === 'percent' && parseFloat(e.value.value) > 400) {
             e.value.value = '50';
           } else if (resize.mode() !== 'percent' && parseFloat(e.value.value) <= 100) {
@@ -332,7 +327,7 @@ window.ITB = window.ITB || {};
         lines.push('尺寸和目标一致，图片不会被重新编码。');
       }
 
-      // 统计一下有多少张会真的变小
+      // 统计尺寸实际发生变化的图片数量
       var willShrink = 0;
       var willSkip = 0;
       var up = 0;
@@ -455,7 +450,7 @@ window.ITB = window.ITB || {};
 
       e.run.disabled = ITB.state.busy || !selected.length;
 
-      /* 文件池里也显示一下会变成什么后缀 */
+      /* 同步刷新文件池中显示的目标后缀 */
       ITB.app.renderPool();
     }
   };
@@ -471,6 +466,10 @@ window.ITB = window.ITB || {};
     init: function (onChange) {
       var e = pdf.els = {
         name: U.$('pdf-name'),
+        stamp: U.$('pdf-stamp'),
+        nameHint: U.$('pdf-name-hint'),
+        uniform: U.$('pdf-uniform'),
+        uniformHint: U.$('pdf-uniform-hint'),
         summary: U.$('pdf-summary'),
         pages: U.$('pdf-pages'),
         status: U.$('pdf-status'),
@@ -478,6 +477,10 @@ window.ITB = window.ITB || {};
       };
 
       e.name.addEventListener('input', onChange);
+      // 勾选框仅影响最终文件名，切换后重算预览即可
+      if (e.stamp) e.stamp.addEventListener('change', onChange);
+      // 统一宽度会改变各页的最终尺寸，需重算页面列表
+      if (e.uniform) e.uniform.addEventListener('change', onChange);
 
       // 执行按钮由 app.js 统一绑定
     },
@@ -486,11 +489,54 @@ window.ITB = window.ITB || {};
       return pdf.els.name.value.trim();
     },
 
+    /** 自动命名时是否附加时间戳。默认附加（勾选框默认选中） */
+    stampOn: function () {
+      var el = pdf.els.stamp;
+      return el ? el.checked : true;
+    },
+
+    /** 是否将所有页统一为最宽一张的宽度。默认启用 */
+    uniformOn: function () {
+      var el = pdf.els.uniform;
+      return el ? el.checked : true;
+    },
+
+    /** 自动命名所用主干：第一张参与处理图片的目录名，或文件名主干 */
+    autoBase: function () {
+      var picked = ITB.selectedFiles();
+      if (!picked.length) return '图片';
+
+      var first = picked[0];
+      var rel = first.relPath || '';
+      if (rel) {
+        var slash = rel.indexOf('/');
+        if (slash > 0) return rel.slice(0, slash);
+      }
+      return U.splitExt(first.name).base.replace(/[\s_\-]*\d+$/, '') || '图片';
+    },
+
+    /** 最终文件名的预览；已填写文件名时以填写内容为准 */
+    namePreview: function () {
+      var custom = pdf.outName();
+      if (custom) return custom + '.pdf';
+
+      var base = pdf.autoBase();
+      return pdf.stampOn() ? base + '_' + U.dateStamp() + '.pdf' : base + '.pdf';
+    },
+
     refresh: function () {
       var e = pdf.els;
       var selected = ITB.selectedFiles();
 
       U.clear(e.pages);
+
+      // 实时显示最终文件名，使勾选框的效果立即可见
+      if (e.nameHint) {
+        e.nameHint.textContent = pdf.outName()
+          ? '用你填的名字：' + pdf.namePreview()
+          : '自动命名：' + pdf.namePreview() +
+            (pdf.stampOn() ? '' : '（不带时间戳）');
+      }
 
       if (!selected.length) {
         e.summary.textContent = '先勾选要合并的图片。';
@@ -500,7 +546,29 @@ window.ITB = window.ITB || {};
         return;
       }
 
-      e.summary.textContent = '共 ' + selected.length + ' 页，按左栏顺序排列：';
+      /* 启用统一宽度时，先求最宽一张的宽度，各页按该宽度等比折算。
+         与 pdfBuild.build() 采用同一算法，避免预览与实际产物不一致。 */
+      var uniform = pdf.uniformOn();
+      var maxW = 0;
+      var k;
+      if (uniform) {
+        for (k = 0; k < selected.length; k++) {
+          if (selected[k].measured && selected[k].width > maxW) maxW = selected[k].width;
+        }
+      }
+
+      /* 各页最终的 pt 尺寸。宽高采用同一比例，因此不会变形。 */
+      function finalSize(f) {
+        if (!f.measured || !f.width || !f.height) return null;
+        if (!uniform || !maxW) return { width: f.width, height: f.height };
+        return {
+          width: maxW,
+          height: Math.max(1, Math.round(f.height * (maxW / f.width)))
+        };
+      }
+
+      e.summary.textContent = '共 ' + selected.length + ' 页，按左栏顺序排列：' +
+        (uniform && maxW ? '（统一宽度 ' + maxW + ' pt）' : '');
 
       var list = U.el('div', { cls: 'page-rows', parent: e.pages });
       var limit = Math.min(selected.length, 200);
@@ -509,9 +577,12 @@ window.ITB = window.ITB || {};
         var row = U.el('div', { cls: 'page-row', parent: list });
         U.el('span', { cls: 'page-idx', text: String(i + 1), parent: row });
         U.el('span', { cls: 'page-name', text: f.name, parent: row });
+
+        var size = finalSize(f);
         U.el('span', {
           cls: 'page-size',
-          text: f.measured ? (f.width + '×' + f.height + ' pt') : '读取中…',
+          text: size ? (size.width + '×' + size.height + ' pt')
+                     : (f.measured ? '尺寸未知' : '读取中…'),
           parent: row
         });
       }
@@ -519,16 +590,40 @@ window.ITB = window.ITB || {};
         U.el('p', { cls: 'sec-hint', text: '⋯ 还有 ' + (selected.length - limit) + ' 页未列出', parent: e.pages });
       }
 
-      // 粗估体积：解码后按 JPEG 0.92 大约每像素 0.5 字节
+      // 体积粗估：JPEG 0.92 约每像素 0.5 字节，按最终尺寸计算
       var pixels = 0;
-      for (var k = 0; k < selected.length; k++) {
-        if (selected[k].measured) pixels += selected[k].width * selected[k].height;
+      for (k = 0; k < selected.length; k++) {
+        var sz = finalSize(selected[k]);
+        if (sz) pixels += sz.width * sz.height;
       }
       var est = Math.round(pixels * 0.5);
 
+      // 统一宽度提示：区分放大与缩小，避免误解为图像被压缩
+      if (e.uniformHint) {
+        if (!uniform) {
+          e.uniformHint.textContent =
+            '未勾选：每页各按自己的原图尺寸，一页一张图互不影响。';
+        } else if (!maxW) {
+          e.uniformHint.textContent = '正在读取尺寸…';
+        } else {
+          var up = 0;
+          var down = 0;
+          for (k = 0; k < selected.length; k++) {
+            if (!selected[k].measured) continue;
+            if (selected[k].width < maxW) up++;
+            else if (selected[k].width > maxW) down++;
+          }
+          e.uniformHint.textContent = '统一宽度 ' + maxW + ' pt：' +
+            (up ? up + ' 张窄图会等比放大' : '没有需要放大的图') +
+            (down ? '，' + down + ' 张宽图会等比缩小' : '') + '。';
+        }
+      }
+
       e.status.textContent = '将合并 ' + selected.length + ' 页' +
         (est ? '，粗估 ' + U.formatBytes(est) + '（实际取决于图片内容）' : '') +
-        '。页面尺寸 = 原图像素尺寸。';
+        (uniform && maxW
+          ? '。页面统一宽度 ' + maxW + ' pt，高度按各自比例。'
+          : '。页面尺寸 = 原图像素尺寸（1px = 1pt）。');
       e.status.className = 'run-status';
       e.run.disabled = ITB.state.busy;
     }
@@ -542,7 +637,7 @@ window.ITB = window.ITB || {};
 
   ITB.sections = {
     init: function (onChange) {
-      // 逐个分区初始化，一个分区出问题不该把另外三个也带崩
+      // 逐个分区初始化：单个分区异常不应影响其余三个
       [shell, resize, format, pdf].forEach(function (s) {
         try {
           s.init(onChange);
@@ -580,16 +675,14 @@ window.ITB = window.ITB || {};
 
     get: function (id) { return ALL[id]; },
 
-    /** 文件池显示「导出时会变成什么名字」时用得到 */
+    /** 供文件池显示导出名称时调用 */
     shellPlan: function () { return shell.plan(); },
 
-    /** 转格式分区有没有换后缀 */
+    /** 转格式分区是否改变扩展名 */
     formatExt: function () {
       if (!format.els.keepExt || !format.els.keepExt.checked) return null;
       return ITB.transform.extOf(format.current);
-    },
-
-    formatLabel: function () { return ITB.transform.labelOf(format.current); }
+    }
   };
 
 })(window.ITB);

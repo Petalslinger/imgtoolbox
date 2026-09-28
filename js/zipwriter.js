@@ -1,10 +1,12 @@
 /* ============================================================
-   zipwriter.js —— 自研 ZIP 写出器，零依赖
-   替代 fflate。只做这个工具箱需要的两件事：
-     · 条目可以用 store（不压缩）或 deflate 压缩
-     · 文件名按 UTF-8 写入并置通用标志位 bit 11，中文名不乱码
-   结构照 PKWARE APPNOTE：每个条目一个 Local File Header + 数据，
-   最后一段 Central Directory + End of Central Directory。
+   zipwriter.js —— ZIP 写出器（零依赖，替代 fflate）
+
+   功能范围限于本工具所需的两点：
+     · 条目按 store（不压缩）或 deflate 写出
+     · 条目名按 UTF-8 编码并置通用标志位 bit 11
+
+   结构依据 PKWARE APPNOTE：每条目一个 Local File Header + 数据，
+   末尾为 Central Directory + End of Central Directory。
    ============================================================ */
 
 window.ITB = window.ITB || {};

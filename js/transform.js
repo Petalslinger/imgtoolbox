@@ -1,10 +1,9 @@
 /* ============================================================
    transform.js —— 像素处理与缩放数学
-   这里是缩放/重编码的「唯一实现」：
-     · 5 个纯函数挂在 window.ITB.transform 上，主线程和 Worker 共用
-     · 真正的像素计算只发生在 canvas 上，同步、无 DOM 依赖，
-       所以同一份代码既能在 Worker 里跑，也能在主线程兜底跑
-   不存在两份实现，也就不会出现两套 bug。
+   缩放与重编码的唯一实现：
+     · 5 个纯函数挂载于 window.ITB.transform，主线程与 Worker 共用
+     · 像素计算仅在 canvas 上同步执行，无 DOM 依赖，
+       因此同一份代码既可在 Worker 运行，也可在主线程兜底
    ============================================================ */
 
 window.ITB = window.ITB || {};
@@ -22,14 +21,14 @@ window.ITB = window.ITB || {};
       width: 1920,
       height: 1080,
       percent: 50,
-      allowUpscale: false     // 默认禁止放大：800px 的图不该被拉到 2000px 变糊
+      allowUpscale: false     // 默认禁止放大：放大仅插值，不增加细节
     };
   }
 
   function defaultFormatParams() {
     return {
       format: 'jpeg',         // 'png' | 'jpeg' | 'webp'
-      quality: 0.92           // PNG 忽略它
+      quality: 0.92           // PNG 忽略此参数
     };
   }
 
@@ -39,9 +38,9 @@ window.ITB = window.ITB || {};
   }
 
   /**
-   * 等比算出目标尺寸。
-   * 只允许填一个方向，另一边永远按原比例算出来——所以输出的宽高比
-   * 必然等于原图，不存在拉伸变形的可能。
+   * 按比例计算目标尺寸。
+   * 仅指定一个方向，另一方向由原比例推导，因此输出宽高比必然等于原图，
+   * 不会发生拉伸变形。
    */
   function computeTarget(srcW, srcH, p) {
     if (!srcW || !srcH) {
@@ -96,7 +95,7 @@ window.ITB = window.ITB || {};
   function summarizeFormat(p) {
     var s = labelOf(p.format);
     if (p.format !== 'png') s += ' 质量 ' + Math.round(num(p.quality, 0.92) * 100) + '%';
-    return s + '（透明垫白底）';
+    return s + '（透明填充白底）';
   }
 
   // 从 MIME 反查格式名
@@ -114,13 +113,13 @@ window.ITB = window.ITB || {};
      ============================================================ */
 
   /**
-   * 把位图贴到 canvas 上。
-   * 这个上下文**强制不透明**（alpha:false）。否则即使先铺了白底，
-   * 导出的 PNG 依然带 alpha 通道（颜色类型 6），会让 PDF 那边误判成
-   * 「需要垫白底」而反复重编码，甚至直接报错。
-   * 需要保留透明的情况我们根本不走 canvas（原文件透传）。
+   * 将位图绘制到 canvas。
+   * 上下文强制不透明（alpha:false），并统一先铺白底。
+   * 不透明上下文导出的 PNG 不含 alpha 通道（颜色类型 6），
+   * 可避免 PDF 侧判定为「需填充白底」而重复重编码。
+   * 代价是输出必定经过压平，保留透明需绕过 canvas（原文件透传）。
    */
-  function drawToCanvas(bitmap, targetW, targetH, opaque) {
+  function drawToCanvas(bitmap, targetW, targetH) {
     var canvas;
     if (typeof OffscreenCanvas === 'function') {
       canvas = new OffscreenCanvas(targetW, targetH);
@@ -135,18 +134,19 @@ window.ITB = window.ITB || {};
     ctx.imageSmoothingEnabled = true;
     if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
 
-    if (opaque) {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, targetW, targetH);
-    }
+    /* alpha:false 上下文的背板为不透明黑，透明像素若不处理会变为黑色。
+       因此须先铺白底再绘制，以对齐 png2pdf 的 to_rgb() 行为；
+       对完全不透明的图，铺底不产生影响。 */
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, targetW, targetH);
 
     ctx.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, 0, 0, targetW, targetH);
     return canvas;
   }
 
   /**
-   * 编码。WebP 在个别浏览器上不被 canvas 支持，这时降级成 PNG，
-   * 并把真正产出的类型如实报回去，免得文件后缀和内容对不上。
+   * 编码。部分浏览器的 canvas 不支持 WebP，此时降级为 PNG，
+   * 并如实返回实际产出的类型，避免文件后缀与内容不一致。
    */
   function canvasToBlob(canvas, mime, quality) {
     function attempt(type) {
@@ -179,7 +179,7 @@ window.ITB = window.ITB || {};
 
   function decodeImage(file) {
     if (typeof createImageBitmap === 'function') {
-      // imageOrientation:'from-image' 让带 EXIF 旋转标记的照片按正确方向显示
+      // imageOrientation:'from-image'：按 EXIF 方向标记校正照片方向
       return createImageBitmap(file, { imageOrientation: 'from-image' })
         .catch(function () { return createImageBitmap(file); });
     }
@@ -209,12 +209,17 @@ window.ITB = window.ITB || {};
       var outW = target.width;
       var outH = target.height;
 
-      // 需要重画的唯一原因：尺寸变了，或者输出是 JPEG（必须垫白底）
-      var wantsOpaque = (mime === 'image/jpeg');
-      var needRedraw = !target.unchanged || wantsOpaque;
+      /* 重绘条件：
+         1. 尺寸发生变化；
+         2. 目标为 JPEG —— JPEG 不含 alpha，即使尺寸不变也须经
+            canvas 的 alpha:false 白底压平透明区（对齐 png2pdf 的 to_rgb）。
+         其余情况原文件透传，不重编码任何像素，
+         这也是保留透明的唯一路径（如 PNG → PNG 且尺寸不变）。 */
+      var needFlatten = (mime === 'image/jpeg');
+      var needRedraw = !target.unchanged || needFlatten;
 
       if (needRedraw) {
-        var canvas = drawToCanvas(bmp, outW, outH, wantsOpaque);
+        var canvas = drawToCanvas(bmp, outW, outH);
         return canvasToBlob(canvas, mime, quality).then(function (blob) {
           return {
             blob: blob,
@@ -225,7 +230,7 @@ window.ITB = window.ITB || {};
         });
       }
 
-      // 尺寸和格式都不用动：原文件直接透传，一个像素都不重编码
+      // 尺寸与格式均无需变更：原文件透传，不重编码任何像素
       return {
         blob: file,
         width: srcW, height: srcH,
@@ -241,70 +246,9 @@ window.ITB = window.ITB || {};
     });
   }
 
-  /** 给 workerhost 的兜底路径用：签名和 worker 里保持一致 */
+  /** 供 workerHost 兜底路径调用：签名与 Worker 内保持一致 */
   function processOneInline(job, resizeParams, mime, quality) {
     return processOne(job.file, resizeParams, mime, quality);
-  }
-
-  /* ============================================================
-     四、队列级计算：谁决定最终输出、要占多少内存
-     ============================================================ */
-
-  /** 队列里最后一个生效的缩放和最后一个生效的转格式，决定最终输出 */
-  function effectiveSteps(steps) {
-    var resize = null;
-    var format = null;
-    for (var i = 0; i < steps.length; i++) {
-      if (!steps[i].enabled) continue;
-      if (steps[i].type === 'resize') resize = steps[i];
-      if (steps[i].type === 'format') format = steps[i];
-    }
-    return { resize: resize, format: format };
-  }
-
-  /**
-   * 把一张图依次走完所有生效的缩放步骤，算出最终尺寸。
-   * @param {number} srcW
-   * @param {number} srcH
-   * @param {Array} steps  形如 [{ enabled, type:'resize', params }] 的步骤数组
-   */
-  function layoutSize(srcW, srcH, steps) {
-    var w = srcW;
-    var h = srcH;
-    var blocked = false;
-    var applied = 0;
-
-    for (var i = 0; i < steps.length; i++) {
-      if (!steps[i].enabled || steps[i].type !== 'resize') continue;
-      var t = computeTarget(w, h, steps[i].params);
-      w = t.width;
-      h = t.height;
-      if (t.blockedByUpscale) blocked = true;
-      applied++;
-    }
-
-    return {
-      width: w,
-      height: h,
-      resized: applied > 0,
-      blockedByUpscale: blocked,
-      unchanged: (w === srcW && h === srcH)
-    };
-  }
-
-  /** 粗估内存占用：canvas 的 RGBA 位图 4 字节/像素，编码产物按 1 字节/像素估 */
-  function estimateMemory(files, steps) {
-    var bytes = 0;
-    var pixels = 0;
-
-    for (var i = 0; i < files.length; i++) {
-      var f = files[i];
-      var t = layoutSize(f.width || 1200, f.height || 1200, steps);
-      pixels += t.width * t.height;
-      bytes += t.width * t.height * 5;
-    }
-
-    return { bytes: bytes, pixels: pixels, count: files.length };
   }
 
   ITB.transform = {
@@ -312,6 +256,7 @@ window.ITB = window.ITB || {};
     defaultResizeParams: defaultResizeParams,
     defaultFormatParams: defaultFormatParams,
     // 计算
+    num: num,
     computeTarget: computeTarget,
     summarize: summarize,
     summarizeFormat: summarizeFormat,
@@ -319,9 +264,6 @@ window.ITB = window.ITB || {};
     extOf: extOf,
     labelOf: labelOf,
     formatFromMime: formatFromMime,
-    effectiveSteps: effectiveSteps,
-    layoutSize: layoutSize,
-    estimateMemory: estimateMemory,
     // 像素处理（唯一实现）
     drawToCanvas: drawToCanvas,
     canvasToBlob: canvasToBlob,
