@@ -26,6 +26,7 @@
       <select id="sel-sort" class="input input-sm">
         <option value="natural">数字感知（1,2,…,10）</option>
         <option value="lex">字典序</option>
+        <option value="manual">手动排序</option>
       </select>
     </label>
     <label class="field-inline">
@@ -73,7 +74,7 @@
       <button id="btn-reset-order" class="link-btn is-hidden" type="button">还原排序</button>
     </div>
 
-    <div class="pool-list" id="pool-list" tabindex="0" aria-label="图片列表，可拖拽调整顺序"></div>
+    <div class="pool-list" id="pool-list" tabindex="0" aria-label="图片列表，可拖动 ≡ 或按上下方向键调整顺序"></div>
 
     <div class="panel-foot">
       <span class="foot-label">顺序 = 导出顺序</span>

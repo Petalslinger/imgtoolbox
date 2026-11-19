@@ -19,6 +19,11 @@ window.ITB = window.ITB || {};
   // 仍挂载于 DOM 的旧 URL 而导致显示中断。
   var thumbCache = Object.create(null);   // id → canvas
   var thumbPending = Object.create(null);
+  // 拖动时的大图预览（120px）。只缓存最近用过的若干张，避免大批量时占内存
+  var previewCache = Object.create(null);
+  var previewPending = Object.create(null);
+  var previewQueue = [];
+  var PREVIEW_CACHE_LIMIT = 24;
   // 缩略图异步生成并直接替换 DOM 节点，不触发整体重渲染，
   // 因此需缓存每个文件的输出名称，以便补图时同步补充该行
   var finalNameCache = Object.create(null);
@@ -74,7 +79,10 @@ window.ITB = window.ITB || {};
     if (!incoming.length) return 0;
 
     st.files = st.files.concat(incoming);
-    applySort();
+
+    /* 手动排序下不重排：新图片追加到末尾，已有顺序保持不变；
+       自动排序下则与已有图片一起重新排序。 */
+    if (!isManual()) applySort();
 
     // 同步触发尺寸测量（仅读取文件头），供预览使用
     measure(incoming, onChanged);
@@ -134,18 +142,44 @@ window.ITB = window.ITB || {};
     st.files.sort(comparator());
   }
 
+  function isManual() {
+    return ITB.state.sortMode === 'manual';
+  }
+
+  /**
+   * 进入手动排序。记录此前的自动排序方式，供「还原排序」恢复。
+   * 拖动 ≡ 或按方向键时自动调用；也可直接从排序下拉框选择「手动排序」。
+   */
+  function enterManual() {
+    var st = ITB.state;
+    if (st.sortMode === 'manual') return;
+
+    st.autoSortMode = st.sortMode;
+    st.autoSortOrder = st.sortOrder;
+    st.sortMode = 'manual';
+  }
+
   /** 界面排序选项变更 */
   function setSort(mode, order) {
     var st = ITB.state;
+
+    if (mode === 'manual') {
+      enterManual();
+      return;
+    }
+
     st.sortMode = mode;
-    st.sortOrder = order;
-    if (!st.manualOrder) applySort();
+    st.sortOrder = order === 'desc' ? 'desc' : 'asc';
+    st.autoSortMode = st.sortMode;
+    st.autoSortOrder = st.sortOrder;
+    applySort();
   }
 
-  /** 恢复自动排序 */
+  /** 恢复自动排序（回到进入手动排序前的方式） */
   function resetOrder() {
     var st = ITB.state;
-    st.manualOrder = false;
+    st.sortMode = st.autoSortMode || 'natural';
+    st.sortOrder = st.autoSortOrder || 'asc';
     applySort();
   }
 
@@ -156,11 +190,12 @@ window.ITB = window.ITB || {};
     var to = indexOf(toId);
     if (from < 0 || to < 0 || from === to) return false;
 
+    enterManual();
+
     var item = st.files.splice(from, 1)[0];
     // 移除元素后目标下标可能前移一位
     to = indexOf(toId);
     st.files.splice(after ? to + 1 : to, 0, item);
-    st.manualOrder = true;
     return true;
   }
 
@@ -171,9 +206,10 @@ window.ITB = window.ITB || {};
     var j = i + delta;
     if (j < 0 || j >= st.files.length) return false;
 
+    enterManual();
+
     var item = st.files.splice(i, 1)[0];
     st.files.splice(j, 0, item);
-    st.manualOrder = true;
     return true;
   }
 
@@ -212,7 +248,10 @@ window.ITB = window.ITB || {};
     var st = ITB.state;
     releaseThumbs();
     st.files = [];
-    st.manualOrder = false;
+    st.sortMode = 'natural';
+    st.sortOrder = 'asc';
+    st.autoSortMode = 'natural';
+    st.autoSortOrder = 'asc';
     st.sampleId = null;
     if (onChanged) onChanged();
   }
@@ -323,9 +362,13 @@ window.ITB = window.ITB || {};
     // 拖拽手柄
     U.el('span', { cls: 'pool-grip', text: '≡', parent: row, attrs: { title: '拖动调整顺序' } });
 
-    // 点击该行即将其设为预览样本（改分辨率分区据此计算示例尺寸）
-    row.addEventListener('mousedown', function () {
+    // 点击该行即将其设为预览样本（改分辨率分区据此计算示例尺寸），
+    // 同时把焦点交给列表，方向键便能立即调整这一行
+    row.addEventListener('mousedown', function (e) {
       st.sampleId = item.id;
+      if (e.button === 0 && e.target !== cb) {
+        listEl.focus({ preventScroll: true });
+      }
     });
     return row;
   }
@@ -333,7 +376,7 @@ window.ITB = window.ITB || {};
   function makeThumb(item) {
     var cached = thumbCache[item.id];
     if (cached) {
-      var clone = cached.cloneNode(false);      // 浅拷贝，共享像素数据
+      var clone = cloneCanvas(cached);
       clone.className = 'pool-thumb';
       clone.removeAttribute('data-thumb-for');
       return clone;
@@ -352,7 +395,7 @@ window.ITB = window.ITB || {};
         var slot = listEl.querySelector('[data-thumb-for="' + item.id + '"]');
         if (!slot || !slot.parentNode) return;   // 已被重渲染移除
 
-        var ready = canvas.cloneNode(false);
+        var ready = cloneCanvas(canvas);
         ready.className = 'pool-thumb';
         ready.removeAttribute('data-thumb-for');
 
@@ -371,27 +414,71 @@ window.ITB = window.ITB || {};
     return ph;
   }
 
+  /**
+   * Canvas 的 cloneNode 只复制属性、不复制画布像素（Chrome 实测如此），
+   * 因此用 drawImage 复制一份，否则缩略图与拖动预览会显示为空白。
+   */
+  function cloneCanvas(source) {
+    var copy = document.createElement('canvas');
+    copy.width = source.width;
+    copy.height = source.height;
+    copy.getContext('2d').drawImage(source, 0, 0);
+    return copy;
+  }
+
   function buildThumb(item) {
     return U.loadImageBitmap(item.file).then(function (bmp) {
-      var size = 36;
-      var canvas = document.createElement('canvas');
-      canvas.width = size;
-      canvas.height = size;
-
-      var ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#101216';
-      ctx.fillRect(0, 0, size, size);
-      if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
-
-      // 等比缩放至框内并居中，不裁切
-      var scale = Math.min(size / bmp.width, size / bmp.height);
-      var w = Math.max(1, Math.round(bmp.width * scale));
-      var h = Math.max(1, Math.round(bmp.height * scale));
-      ctx.drawImage(bmp, Math.round((size - w) / 2), Math.round((size - h) / 2), w, h);
+      var canvas = drawContained(bmp, 36);
       if (typeof bmp.close === 'function') bmp.close();
-
       return canvas;
     }).catch(function () { return null; });
+  }
+
+  /** 把图片等比放进 size×size 的方框并居中，空余处填工具栏底色 */
+  function drawContained(bmp, size) {
+    var canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#101216';
+    ctx.fillRect(0, 0, size, size);
+    if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+
+    var scale = Math.min(size / bmp.width, size / bmp.height);
+    var w = Math.max(1, Math.round(bmp.width * scale));
+    var h = Math.max(1, Math.round(bmp.height * scale));
+    ctx.drawImage(bmp, Math.round((size - w) / 2), Math.round((size - h) / 2), w, h);
+    return canvas;
+  }
+
+  /** 拖动预览用的大图；同一文件只解码一次，LRU 限制缓存数量 */
+  function getPreview(item) {
+    if (previewCache[item.id]) return Promise.resolve(previewCache[item.id]);
+    if (previewPending[item.id]) return previewPending[item.id];
+
+    var task = U.loadImageBitmap(item.file).then(function (bmp) {
+      var canvas = drawContained(bmp, 120);
+      if (typeof bmp.close === 'function') bmp.close();
+      rememberPreview(item.id, canvas);
+      return canvas;
+    }).catch(function () {
+      return null;
+    }).then(function (canvas) {
+      delete previewPending[item.id];
+      return canvas;
+    });
+
+    previewPending[item.id] = task;
+    return task;
+  }
+
+  function rememberPreview(id, canvas) {
+    previewCache[id] = canvas;
+    previewQueue.push(id);
+    while (previewQueue.length > PREVIEW_CACHE_LIMIT) {
+      delete previewCache[previewQueue.shift()];
+    }
   }
 
   function extTag(name) {
@@ -403,6 +490,9 @@ window.ITB = window.ITB || {};
   function releaseThumbs() {
     thumbCache = Object.create(null);
     thumbPending = Object.create(null);
+    previewCache = Object.create(null);
+    previewPending = Object.create(null);
+    previewQueue = [];
   }
 
   /* ── 拖拽排序 ───────────────────────────────────────────── */
@@ -411,9 +501,20 @@ window.ITB = window.ITB || {};
   var dropTarget = null;
   var dropAfter = false;
   var dragging = false;
+  var dragStartX = 0;
+  var dragStartY = 0;
+  var ghostEl = null;
+  var ghostFrame = null;
+  var ghostW = 0;
+  var ghostH = 0;
+
+  // 按住手柄后先移动一小段才算拖动，避免单纯点击时误触发
+  var DRAG_THRESHOLD = 4;
 
   function bindDrag() {
     listEl.addEventListener('mousedown', function (e) {
+      if (e.button !== 0) return;
+
       var grip = e.target.closest ? e.target.closest('.pool-grip') : null;
       if (!grip) return;
       var row = grip.closest('.pool-item');
@@ -423,16 +524,24 @@ window.ITB = window.ITB || {};
       dragId = parseInt(row.dataset.id, 10);
       dragging = false;
       dropTarget = null;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
     });
 
     document.addEventListener('mousemove', function (e) {
       if (dragId === null) return;
 
       if (!dragging) {
+        if (Math.abs(e.clientX - dragStartX) < DRAG_THRESHOLD &&
+            Math.abs(e.clientY - dragStartY) < DRAG_THRESHOLD) return;
+
         dragging = true;
         var startRow = rowOf(dragId);
         if (startRow) startRow.classList.add('is-dragging');
+        showGhost(dragId, e.clientX, e.clientY);
       }
+
+      moveGhost(e.clientX, e.clientY);
 
       var row = rowFromPoint(e.clientY);
       clearDropMarks();
@@ -464,6 +573,7 @@ window.ITB = window.ITB || {};
       var row = rowOf(from);
       if (row) row.classList.remove('is-dragging');
       listEl.classList.remove('is-dragover');
+      removeGhost();
 
       dragId = null;
       dropTarget = null;
@@ -473,6 +583,96 @@ window.ITB = window.ITB || {};
         ITB.app.onOrderChanged();
       }
     });
+
+    // 拖到一半按 Esc 或窗口失焦：取消本次拖动，顺序保持不变
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') cancelDrag();
+    });
+    window.addEventListener('blur', cancelDrag);
+  }
+
+  /** 拖动时跟随光标的放大预览：图片 + 文件名 + 原序号 */
+  function showGhost(id, x, y) {
+    removeGhost();
+
+    var item = ITB.findFile(id);
+    if (!item) return;
+
+    var root = U.el('div', { cls: 'pool-drag-ghost', attrs: { 'aria-hidden': 'true' } });
+    var frame = U.el('div', { cls: 'pool-drag-frame', parent: root });
+    var seq = indexOf(id) + 1;
+    if (seq > 0) U.el('span', { cls: 'pool-drag-seq', text: String(seq), parent: frame });
+
+    // 先用缓存的小缩略图占位，避免等待大图解码时预览卡空白
+    if (thumbCache[id]) {
+      var small = cloneCanvas(thumbCache[id]);
+      small.className = 'pool-drag-thumb';
+      frame.appendChild(small);
+    } else {
+      U.el('span', { cls: 'pool-drag-ph', text: extTag(item.name), parent: frame });
+    }
+
+    U.el('div', { cls: 'pool-drag-name', text: item.name, parent: root });
+
+    root.style.visibility = 'hidden';
+    document.body.appendChild(root);
+    ghostEl = root;
+    ghostFrame = frame;
+    ghostW = root.offsetWidth;
+    ghostH = root.offsetHeight;
+    moveGhost(x, y);
+    root.style.visibility = '';
+
+    getPreview(item).then(function (canvas) {
+      if (!canvas || !ghostEl || ghostFrame !== frame || dragId !== id) return;
+      if (!frame.parentNode) return;
+
+      var ready = cloneCanvas(canvas);
+      ready.className = 'pool-drag-thumb';
+      var old = frame.querySelector('.pool-drag-thumb, .pool-drag-ph');
+      if (old) frame.replaceChild(ready, old);
+      else frame.appendChild(ready);
+    });
+  }
+
+  function moveGhost(x, y) {
+    if (!ghostEl) return;
+
+    // 尺寸在创建时量一次即可，避免 mousemove 中反复触发布局计算
+    var w = ghostW || ghostEl.offsetWidth;
+    var h = ghostH || ghostEl.offsetHeight;
+    var px = x + 18;
+    var py = y + 18;
+
+    // 靠近视口右/下边缘时翻到光标另一侧，始终完整可见
+    if (px + w > window.innerWidth - 8) px = x - w - 18;
+    if (py + h > window.innerHeight - 8) py = y - h - 18;
+    if (px < 8) px = 8;
+    if (py < 8) py = 8;
+
+    ghostEl.style.transform = 'translate3d(' + px + 'px,' + py + 'px,0)';
+  }
+
+  function removeGhost() {
+    if (ghostEl && ghostEl.parentNode) ghostEl.parentNode.removeChild(ghostEl);
+    ghostEl = null;
+    ghostFrame = null;
+    ghostW = 0;
+    ghostH = 0;
+  }
+
+  function cancelDrag() {
+    if (dragId === null) return;
+
+    clearDropMarks();
+    var row = rowOf(dragId);
+    if (row) row.classList.remove('is-dragging');
+    listEl.classList.remove('is-dragover');
+    removeGhost();
+
+    dragId = null;
+    dropTarget = null;
+    dragging = false;
   }
 
   function rowOf(id) {

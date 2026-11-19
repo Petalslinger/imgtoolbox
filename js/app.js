@@ -405,22 +405,27 @@ window.ITB = window.ITB || {};
   function refreshChrome() {
     var st = ITB.state;
     var selected = ITB.selectedFiles();
+    var manual = st.sortMode === 'manual';
 
     if (ui.statCount) ui.statCount.textContent = String(st.files.length);
     if (ui.statSelected) ui.statSelected.textContent = '已选 ' + selected.length;
 
     if (ui.selSort) ui.selSort.value = st.sortMode;
-    if (ui.selOrder) ui.selOrder.value = st.sortOrder;
-    if (ui.resetOrder) ui.resetOrder.classList.toggle('is-hidden', !st.manualOrder);
+    if (ui.selOrder) {
+      ui.selOrder.value = st.sortOrder;
+      // 手动排序不使用方向，禁用避免造成「改了方向却没反应」的误解
+      ui.selOrder.disabled = manual || st.busy;
+    }
+    if (ui.resetOrder) ui.resetOrder.classList.toggle('is-hidden', !manual);
 
     if (ui.poolHint) {
       if (!st.files.length) {
         ui.poolHint.textContent = '还没有图片。点上方「添加图片…」或「添加文件夹…」。';
       } else if (!selected.length) {
         ui.poolHint.textContent = '当前没有勾选任何图片。';
-      } else if (st.manualOrder) {
-        ui.poolHint.textContent = '已手动调整顺序 · 共 ' + st.files.length +
-          ' 张，' + selected.length + ' 张参与处理';
+      } else if (manual) {
+        ui.poolHint.textContent = '手动排序 · 拖动 ≡ 或选中后按 ↑ / ↓ 调整 · 共 ' +
+          st.files.length + ' 张，' + selected.length + ' 张参与处理';
       } else {
         ui.poolHint.textContent = '共 ' + st.files.length + ' 张，' +
           selected.length + ' 张参与处理';

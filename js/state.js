@@ -15,9 +15,13 @@ window.ITB = window.ITB || {};
     seq: 1,
 
     /* 界面配置 */
-    sortMode: 'natural',        // 'natural' | 'lex'
-    sortOrder: 'asc',           // 'asc' | 'desc'
-    manualOrder: false,         // 是否已手动调整顺序（调整后不再自动重排）
+    sortMode: 'natural',        // 'natural' | 'lex' | 'manual'
+    sortOrder: 'asc',           // 'asc' | 'desc'；手动排序时方向不参与排序
+
+    /* 进入手动排序前的自动排序方式。点「还原排序」时恢复到这里，
+       而不是一律退回数字感知升序。 */
+    autoSortMode: 'natural',
+    autoSortOrder: 'asc',
 
     /* 当前分区：'shell' | 'resize' | 'format' | 'pdf' */
     tab: 'shell',
